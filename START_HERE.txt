@@ -1,0 +1,66 @@
+======================================================================
+  AUTO WORKSHOP MANAGEMENT POS — VERSION 1.2.2
+  START HERE — QUICK WINDOWS GUIDE (NO CODING REQUIRED)
+======================================================================
+
+STEP 1: EXTRACT THIS ZIP ARCHIVE
+----------------------------------------------------------------------
+Right-click `Auto-Workshop-Management-POS-v1.2.2.zip` and choose
+"Extract All..." to a folder on your computer, for example:
+  C:\AutoWorkshopPOS
+
+
+STEP 2: MAKE SURE PYTHON 3.11+ IS INSTALLED
+----------------------------------------------------------------------
+This application supports Python 3.11 through Python 3.14+ (including
+Python 3.14.6) via the standard Windows Python Launcher (`py -3`) or
+`python`.
+- If you do not have Python installed, download it from:
+  https://www.python.org/downloads/
+
+
+STEP 3: START THE APPLICATION (DOUBLE-CLICK)
+----------------------------------------------------------------------
+Inside the extracted folder, double-click:
+
+  run_windows.bat
+
+(Or in PowerShell inside the folder, run: `.\run_windows.bat`)
+
+What happens automatically:
+1. `run_windows.bat` detects `.venv\Scripts\python.exe`, `py -3`, or `python`.
+2. On first run, it creates a local `.venv` folder and installs the
+   required Python packages from `requirements.txt`.
+3. It initializes your local SQLite database (`data\auto_workshop.db`)
+   while preserving any existing workshop data.
+4. It starts the server on:
+     http://127.0.0.1:8000
+   (If port 8000 is already in use by another program, it automatically
+   switches to the next available port such as 8001, prints the exact
+   URL in the terminal window, and opens that URL in your browser.)
+5. Once the server is ready and responding, your web browser opens
+   automatically.
+
+
+STEP 4: FIRST-TIME ADMINISTRATOR SETUP
+----------------------------------------------------------------------
+On your very first launch, the screen will prompt you to create your
+Administrator username, full name, and password (minimum 6 characters).
+After creating your account, you will be signed in immediately.
+
+
+STEP 5: HOW TO STOP THE APPLICATION
+----------------------------------------------------------------------
+Click inside the black terminal window where the server is running and
+press:
+  Ctrl + C
+Or simply close the terminal window when you are done for the day.
+
+
+IF ANYTHING GOES WRONG
+----------------------------------------------------------------------
+- Double-click `repair_windows.bat` to automatically repair `pip`,
+  rebuild `.venv`, and reinstall dependencies without touching your
+  workshop database (`data\auto_workshop.db`).
+- See `TROUBLESHOOTING.md` for step-by-step solutions.
+======================================================================

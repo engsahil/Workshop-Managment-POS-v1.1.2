@@ -1,0 +1,12 @@
+# Release Progress & Audit Log — Auto Workshop Management POS v1.2.2
+
+## Root-Cause Defect Matrix & Resolutions (v1.2.2)
+
+| ID | Area | Symptom / Requirement | Root Cause | Resolution | Status |
+| :--- | :--- | :--- | :--- | :--- | :---: |
+| **V122-01** | `frontend/assets/js/core/ui.js` | `returns.js:3` & `app.js:3` threw `SyntaxError` for missing `fmtPKR` and `$` exports | `ui.js` exported `money` instead of `fmtPKR` and did not export `$` | Added `export const $`, `export const $$`, and `export const fmtPKR = money;` in `ui.js` and updated `confirmDialog()` to accept both string and object arguments | **FIXED & VERIFIED** |
+| **V122-02** | `frontend/assets/js/core/app.js` | `dashboard.js`, `jobs.js`, `pos.js`, `settings.js`, `shifts.js` imported `openDailySummaryModal` and `refreshHeaderContext` | Functions in `app.js` were named `showDailyClosingSummaryModal` and `refreshBusinessHeader` | Exported `openDailySummaryModal` and `refreshHeaderContext` aliases from `app.js` | **FIXED & VERIFIED** |
+| **V122-03** | `frontend/assets/js/core/app.js` & `backend/app/schemas/auth.py` | First-run `#setup-form` omitted `password_confirm` field in JSON body | `app.js` validated `password_confirm` client-side but only sent `username`, `full_name`, `password` | Added `password_confirm` to `app.js` setup request and made `SetupAdminIn.password_confirm` optional when omitted | **FIXED & VERIFIED** |
+| **V122-04** | `frontend/index.html` | Browser warning `<meta name="apple-mobile-web-app-capable" content="yes"> is deprecated` | Deprecated meta tag name in `index.html` | Replaced with standard `<meta name="mobile-web-app-capable" content="yes" />` | **FIXED & VERIFIED** |
+| **V122-05** | `run_windows.bat`, `install_windows.bat`, `repair_windows.bat` | Windows systems with Python 3.14.6 installed via `py -3` where `python` is not on `PATH` | Previous scripts checked `where python` without checking `py -3` first | Updated all Windows scripts to check `.venv\Scripts\python.exe`, then `py -3`, then `python`, and auto-create `.venv` | **FIXED & VERIFIED** |
+| **V122-06** | `backend/run.py` | Port 8000 conflict & premature browser launch | Previous script exited on port conflict and `.bat` opened browser before uvicorn was listening | Added `_select_port()` auto-fallback (`8000 -> 8001+`) and `_wait_until_ready_and_open_browser()` polling `/api/health` before announcing `[READY]` and opening the browser | **FIXED & VERIFIED** |

@@ -1,0 +1,34 @@
+# Python virtual environments & bytecode
+.venv/
+venv/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Test & linter caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local runtime data, databases, backups & logs (never commit private user data)
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+
+# Environment secrets & OS / editor files
+.env
+.env.local
+.DS_Store
+Thumbs.db
+*.bak
+*.orig
+*.tmp
+*.zip
