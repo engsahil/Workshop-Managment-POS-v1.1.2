@@ -63,10 +63,32 @@ def get_vehicle(db: Session, vid: int) -> Vehicle | None:
     return db.get(Vehicle, vid)
 
 
+def _normalise_registration(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = " ".join(value.split()).upper()
+    return cleaned or None
+
+
+def _check_registration_unique(db: Session, registration_no: str | None,
+                               exclude_id: int | None = None) -> None:
+    reg = _normalise_registration(registration_no)
+    if not reg:
+        return
+    q = db.query(Vehicle).filter(func.upper(Vehicle.registration_no) == reg)
+    if exclude_id:
+        q = q.filter(Vehicle.id != exclude_id)
+    if q.first():
+        raise ValueError(f"Vehicle registration '{registration_no}' is already registered")
+
+
 def create_vehicle(db: Session, data: dict) -> Vehicle:
     cust = db.get(Customer, data["customer_id"])
     if cust is None:
         raise ValueError("Customer does not exist")
+    _check_registration_unique(db, data.get("registration_no"))
+    if data.get("registration_no"):
+        data = {**data, "registration_no": _normalise_registration(data["registration_no"])}
     v = Vehicle(**data)
     db.add(v)
     db.commit()
@@ -74,6 +96,11 @@ def create_vehicle(db: Session, data: dict) -> Vehicle:
 
 
 def update_vehicle(db: Session, v: Vehicle, data: dict) -> Vehicle:
+    if data.get("customer_id") is not None and db.get(Customer, data["customer_id"]) is None:
+        raise ValueError("Customer does not exist")
+    if data.get("registration_no") is not None:
+        _check_registration_unique(db, data["registration_no"], exclude_id=v.id)
+        data = {**data, "registration_no": _normalise_registration(data["registration_no"])}
     for k, val in data.items():
         if val is not None or k in ("registration_no", "engine_no", "chassis_no", "notes", "odometer"):
             setattr(v, k, val)

@@ -11,7 +11,7 @@ Expected cash is computed ONLY from cash transactions:
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..models import CashShift, CashMovement, Payment, Expense
+from ..models import CashShift, CashMovement, Payment, Expense, User
 from ..services import audit_service
 
 
@@ -21,10 +21,12 @@ def current_shift(db: Session, user_id: int) -> CashShift | None:
             .order_by(CashShift.id.desc()).first())
 
 
-def open_shift(db: Session, user_id: int, opening_cash_paisa: int) -> CashShift:
+def open_shift(db: Session, user_id: int, opening_cash_paisa: int,
+               opening_notes: str | None = None) -> CashShift:
     if current_shift(db, user_id):
         raise ValueError("You already have an open shift. Close it first.")
     shift = CashShift(user_id=user_id, opening_cash_paisa=opening_cash_paisa,
+                      opening_notes=opening_notes,
                       expected_cash_paisa=opening_cash_paisa)
     db.add(shift)
     db.commit()
@@ -41,7 +43,8 @@ def expected_cash(db: Session, shift: CashShift) -> int:
                 .scalar() or 0)
     refunded = (db.query(func.coalesce(func.sum(Payment.amount_paisa), 0))
                 .filter(Payment.shift_id == shift.id, Payment.method == "cash",
-                        Payment.amount_paisa < 0, Payment.kind == "refund")
+                        Payment.amount_paisa < 0,
+                        Payment.kind.in_(("refund", "reversal")))
                 .scalar() or 0)
     expenses = (db.query(func.coalesce(func.sum(Expense.amount_paisa), 0))
                 .filter(Expense.shift_id == shift.id, Expense.method == "cash")
@@ -77,6 +80,8 @@ def close_shift(db: Session, shift: CashShift, counted_cash_paisa: int,
                 closing_notes: str | None, user) -> CashShift:
     if shift.status != "open":
         raise ValueError("Shift is already closed")
+    if shift.user_id != user.id and user.role not in ("admin", "manager"):
+        raise PermissionError("You can only close your own cash shift")
     expected = expected_cash(db, shift)
     difference = counted_cash_paisa - expected
     if difference != 0 and user.role not in ("admin", "manager"):
@@ -102,13 +107,17 @@ def close_shift(db: Session, shift: CashShift, counted_cash_paisa: int,
 
 
 def shift_out(db: Session, shift: CashShift) -> dict:
-    user = db.get(__import__("app.models", fromlist=["User"]).User, shift.user_id)
-    expected = expected_cash(db, shift)
+    user = db.get(User, shift.user_id)
+    # Open shifts must reflect live payments; closed shifts keep the figure that
+    # was agreed at reconciliation time.
+    expected = (expected_cash(db, shift) if shift.status == "open"
+                else shift.expected_cash_paisa)
     return {
         "id": shift.id, "user_id": shift.user_id,
         "user_name": user.full_name if user else None,
         "opened_at": shift.opened_at.isoformat() if shift.opened_at else None,
         "opening_cash_paisa": shift.opening_cash_paisa,
+        "opening_notes": shift.opening_notes,
         "expected_cash_paisa": expected,
         "counted_cash_paisa": shift.counted_cash_paisa,
         "difference_paisa": shift.difference_paisa,

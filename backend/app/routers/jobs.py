@@ -1,7 +1,7 @@
 """Workshop job cards."""
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ..core.deps import get_current_user, get_db, require_workshop
+from ..core.deps import get_current_user, get_db, require_pos, require_workshop
 from ..models import JobCard, User
 from ..schemas.jobs import (JobApprovalIn, JobCreateIn, JobEstimateIn,
                                JobPartIn, JobServiceIn, JobStatusIn,
@@ -180,7 +180,7 @@ def vehicle_jobs(vid: int, db=Depends(get_db), _: User = Depends(require_worksho
 
 @router.post("/{jid}/invoice")
 def invoice_job(jid: int, payload: dict = None, db=Depends(get_db),
-                user: User = Depends(require_workshop)):
+                user: User = Depends(require_pos)):
     """Generate the final bill for a job from its services and parts."""
     from ..services import invoice_service
     job = job_service.get_job(db, jid)
@@ -188,6 +188,9 @@ def invoice_job(jid: int, payload: dict = None, db=Depends(get_db),
         raise HTTPException(status_code=404, detail="Job card not found")
     if job.invoice_id:
         raise HTTPException(status_code=400, detail="Job is already invoiced")
+    if job.status == "cancelled":
+        raise HTTPException(status_code=400,
+                            detail="Cannot invoice a cancelled job card")
     items = []
     for js in job.services:
         items.append({

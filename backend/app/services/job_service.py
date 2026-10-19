@@ -154,6 +154,16 @@ def get_job(db: Session, jid: int) -> JobCard | None:
     return db.get(JobCard, jid)
 
 
+def _validate_mechanic(db: Session, mechanic_id: int | None) -> None:
+    """Reject unknown mechanic ids before they hit the FK constraint.
+
+    Without this a typo'd or stale id surfaced as a 500 IntegrityError
+    instead of the 400 the API contract promises.
+    """
+    if mechanic_id and not db.get(Mechanic, mechanic_id):
+        raise ValueError("Mechanic does not exist")
+
+
 def _validate_job(db: Session, data: dict):
     if not db.get(Customer, data["customer_id"]):
         raise ValueError("Customer does not exist")
@@ -162,8 +172,7 @@ def _validate_job(db: Session, data: dict):
         raise ValueError("Vehicle does not exist")
     if veh.customer_id != data["customer_id"]:
         raise ValueError("Vehicle does not belong to this customer")
-    if data.get("mechanic_id") and not db.get(Mechanic, data["mechanic_id"]):
-        raise ValueError("Mechanic does not exist")
+    _validate_mechanic(db, data.get("mechanic_id"))
 
 
 def create_job(db: Session, data: dict, user_id: int | None = None) -> dict:
@@ -230,10 +239,18 @@ def update_job(db: Session, job: JobCard, data: dict, user_id: int | None = None
             raise ValueError(
                 f"Job is '{job.status}' — structural fields are locked. "
                 "Move it back to Received/Inspection to edit.")
-    if "vehicle_id" in data:
-        veh = db.get(Vehicle, data["vehicle_id"])
-        if veh and veh.customer_id != job.customer_id:
+    if "vehicle_id" in data or "customer_id" in data:
+        new_customer_id = data.get("customer_id", job.customer_id)
+        new_vehicle_id = data.get("vehicle_id", job.vehicle_id)
+        if not db.get(Customer, new_customer_id):
+            raise ValueError("Customer does not exist")
+        veh = db.get(Vehicle, new_vehicle_id)
+        if veh is None:
+            raise ValueError("Vehicle does not exist")
+        if veh.customer_id != new_customer_id:
             raise ValueError("Vehicle does not belong to this customer")
+    if "mechanic_id" in data:
+        _validate_mechanic(db, data.get("mechanic_id"))
     warning = None
     if data.get("odometer") is not None and data["odometer"] != job.odometer:
         last = _last_odometer(db, job.vehicle_id) if data["odometer"] else None
@@ -290,6 +307,7 @@ def change_status(db: Session, job: JobCard, new_status: str, notes: str | None,
     notification_service.job_status_notification(db, job, old, None)
     if new_status == "cancelled":
         _restore_all_parts(db, job, user_id, reason="Job cancelled")
+        db.commit()
     return job
 
 
@@ -326,9 +344,14 @@ def add_job_service(db: Session, job: JobCard, data: dict,
     qty = int(data.get("quantity") or 1)
     charge = int(data.get("unit_charge_paisa") or 0)
     disc = int(data.get("discount_paisa") or 0)
+    if qty <= 0:
+        raise ValueError("Service quantity must be at least 1")
+    if charge < 0 or disc < 0:
+        raise ValueError("Charge and discount cannot be negative")
     line = qty * charge - disc
     if line < 0:
         raise ValueError("Discount cannot exceed the line amount")
+    _validate_mechanic(db, data.get("mechanic_id"))
     js = JobService(job_id=job.id, service_id=data.get("service_id"),
                     description=description, quantity=qty,
                     unit_charge_paisa=charge, discount_paisa=disc,
@@ -340,9 +363,16 @@ def add_job_service(db: Session, job: JobCard, data: dict,
 
 
 def update_job_service(db: Session, js: JobService, data: dict) -> JobService:
+    _validate_mechanic(db, data.get("mechanic_id"))
     for k in ("description", "quantity", "unit_charge_paisa", "discount_paisa", "mechanic_id"):
         if k in data and data[k] is not None:
             setattr(js, k, data[k])
+    if not js.description:
+        raise ValueError("Service description is required")
+    if int(js.quantity) <= 0:
+        raise ValueError("Service quantity must be at least 1")
+    if int(js.unit_charge_paisa) < 0 or int(js.discount_paisa) < 0:
+        raise ValueError("Charge and discount cannot be negative")
     js.line_total_paisa = js.quantity * js.unit_charge_paisa - js.discount_paisa
     if js.line_total_paisa < 0:
         raise ValueError("Discount cannot exceed the line amount")
@@ -388,6 +418,8 @@ def update_job_part(db: Session, jp: JobPart, data: dict,
                     user_id: int | None = None) -> JobPart:
     if "quantity" in data and data["quantity"] is not None:
         new_qty = int(data["quantity"])
+        if new_qty <= 0:
+            raise ValueError("Part quantity must be at least 1")
         delta = new_qty - jp.quantity
         if delta != 0:
             product = db.get(Product, jp.product_id)
@@ -398,6 +430,8 @@ def update_job_part(db: Session, jp: JobPart, data: dict,
                         created_by=user_id, unit_cost_paisa=product.purchase_cost_paisa)
             jp.quantity = new_qty
     if data.get("unit_price_paisa") is not None:
+        if int(data["unit_price_paisa"]) < 0:
+            raise ValueError("Unit price cannot be negative")
         jp.unit_price_paisa = int(data["unit_price_paisa"])
     jp.line_total_paisa = jp.quantity * jp.unit_price_paisa
     _recalc_job(db, jp.job)

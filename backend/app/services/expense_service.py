@@ -138,8 +138,15 @@ def create_expense(db: Session, data: dict, user_id: int | None = None) -> Expen
         raise ValueError("Expense category does not exist")
     cleaned = dict(data)
     cleaned["expense_date"] = ensure_datetime(cleaned.get("expense_date"), default_now=True)
+    # Cash expenses must reduce the cash drawer of the user's open shift.
+    shift_id = None
+    if cleaned.get("method", "cash") == "cash" and user_id:
+        from .shift_service import current_shift
+        shift = current_shift(db, user_id)
+        shift_id = shift.id if shift else None
     e = Expense(
         expense_number=next_number(db, "expense_number", "EXP"),
+        shift_id=shift_id,
         **cleaned,
         created_by=user_id,
     )
@@ -200,20 +207,20 @@ def update_expense(
 
 def delete_expense(db: Session, e: Expense, user_id: int | None = None) -> None:
     from ..services import audit_service
+    snapshot = {"amount_paisa": e.amount_paisa,
+                "expense_number": e.expense_number}
+    expense_id = e.id
+    db.delete(e)
+    db.commit()
     audit_service.log(
         db,
         user_id=user_id,
         username=None,
         action="expense.delete",
         entity_type="expense",
-        entity_id=e.id,
-        old_values={
-            "amount_paisa": e.amount_paisa,
-            "expense_number": e.expense_number,
-        },
+        entity_id=expense_id,
+        old_values=snapshot,
     )
-    db.delete(e)
-    db.commit()
 
 
 def expenses_by_category(

@@ -1,7 +1,7 @@
 """Service catalog (labor) and mechanics/staff."""
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..core.deps import get_current_user, get_db
+from ..core.deps import get_current_user, get_db, require_financial
 from ..models import Mechanic, Service as ServiceModel, User
 from ..schemas.catalog import MechanicIn, MechanicUpdateIn, ServiceIn, ServiceUpdateIn
 
@@ -31,7 +31,7 @@ def list_services(q: str | None = None, include_inactive: bool = False,
 
 @router.post("/services")
 def create_service(payload: ServiceIn, db=Depends(get_db),
-                   _: User = Depends(get_current_user)):
+                   _: User = Depends(require_financial)):
     svc = ServiceModel(**payload.model_dump())
     db.add(svc)
     try:
@@ -54,7 +54,7 @@ def _service_out(s: ServiceModel) -> dict:
 
 @router.put("/services/{sid}")
 def update_service(sid: int, payload: ServiceUpdateIn, db=Depends(get_db),
-                   _: User = Depends(get_current_user)):
+                   _: User = Depends(require_financial)):
     s = db.get(ServiceModel, sid)
     if s is None:
         raise HTTPException(status_code=404, detail="Service not found")
@@ -70,7 +70,7 @@ def update_service(sid: int, payload: ServiceUpdateIn, db=Depends(get_db),
 
 
 @router.delete("/services/{sid}")
-def delete_service(sid: int, db=Depends(get_db), _: User = Depends(get_current_user)):
+def delete_service(sid: int, db=Depends(get_db), _: User = Depends(require_financial)):
     s = db.get(ServiceModel, sid)
     if s is None:
         raise HTTPException(status_code=404, detail="Service not found")
@@ -90,18 +90,23 @@ def list_mechanics(include_inactive: bool = False, db=Depends(get_db),
 
 
 def _mech_out(db, m: Mechanic) -> dict:
-    from ..models import JobCard
     from sqlalchemy import func
+
+    from ..models import JobCard, JobService
+    from ..services.report_service import commission_due
     jobs_total = db.query(func.count(JobCard.id)).filter(JobCard.mechanic_id == m.id).scalar() or 0
     jobs_done = db.query(func.count(JobCard.id)).filter(
         JobCard.mechanic_id == m.id,
         JobCard.status.in_(("completed", "ready_for_delivery", "delivered"))).scalar() or 0
+    labor_total = (db.query(func.coalesce(func.sum(JobService.line_total_paisa), 0))
+                   .join(JobCard, JobService.job_id == JobCard.id)
+                   .filter(JobService.mechanic_id == m.id).scalar() or 0)
     user = db.get(User, m.user_id) if m.user_id else None
     return {
         "id": m.id, "name": m.name, "phone": m.phone, "skill": m.skill,
         "commission_type": m.commission_type,
         "commission_value": m.commission_value,
-        "commission_due_paisa": 0,
+        "commission_due_paisa": commission_due(m, jobs_done, int(labor_total)),
         "is_active": m.is_active, "hire_date": m.hire_date.isoformat() if m.hire_date else None,
         "notes": m.notes, "user_id": m.user_id,
         "username": user.username if user else None,
@@ -113,7 +118,7 @@ def _mech_out(db, m: Mechanic) -> dict:
 
 @router.post("/mechanics")
 def create_mechanic(payload: MechanicIn, db=Depends(get_db),
-                    _: User = Depends(get_current_user)):
+                    _: User = Depends(require_financial)):
     m = Mechanic(**payload.model_dump())
     db.add(m)
     db.commit()
@@ -122,7 +127,7 @@ def create_mechanic(payload: MechanicIn, db=Depends(get_db),
 
 @router.put("/mechanics/{mid}")
 def update_mechanic(mid: int, payload: MechanicUpdateIn, db=Depends(get_db),
-                    _: User = Depends(get_current_user)):
+                    _: User = Depends(require_financial)):
     m = db.get(Mechanic, mid)
     if m is None:
         raise HTTPException(status_code=404, detail="Mechanic not found")
@@ -134,7 +139,7 @@ def update_mechanic(mid: int, payload: MechanicUpdateIn, db=Depends(get_db),
 
 
 @router.delete("/mechanics/{mid}")
-def delete_mechanic(mid: int, db=Depends(get_db), _: User = Depends(get_current_user)):
+def delete_mechanic(mid: int, db=Depends(get_db), _: User = Depends(require_financial)):
     m = db.get(Mechanic, mid)
     if m is None:
         raise HTTPException(status_code=404, detail="Mechanic not found")

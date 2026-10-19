@@ -12,7 +12,7 @@ from ..core.constants import (STOCK_SALE, STOCK_RETURN, STOCK_VOID,
                               INVOICE_STATUSES)
 from ..models import (Invoice, InvoiceItem, Payment, Product, Service as ServiceModel,
                       SaleReturn, SaleReturnItem, JobCard, Customer, Vehicle,
-                      JobPart, JobService)
+                      JobPart, JobService, User)
 from ..services import inventory_service, notification_service, audit_service
 from ..services.settings_service import get_setting, next_number
 from ..core.dates import range_utc
@@ -27,7 +27,8 @@ def search_items(db: Session, q: str, limit: int = 20) -> dict:
         prods = (db.query(Product)
                  .filter(Product.is_active.is_(True), Product.is_service.is_(False))
                  .filter((Product.name.ilike(like)) | (Product.sku.ilike(like))
-                         | (Product.barcode == q) | (Product.category_id.isnot(None)))
+                         | (Product.barcode == q)
+                         | (Product.compatibility.ilike(like)))
                  .order_by(Product.id.desc()).limit(limit).all())
         # exact barcode first
         exact = (db.query(Product)
@@ -142,6 +143,13 @@ def create_invoice(db: Session, data: dict, user, from_job: bool = False) -> dic
                 raise ValueError(f"'{product.name}' is deactivated")
             if product.is_service:
                 raise ValueError(f"'{product.name}' is a service, not a stock item")
+            if abs(qty - round(qty)) > 1e-9:
+                # quantity_on_hand is an integer column: billing 0.5 of a part
+                # used to round the stock deduction to 0 and silently corrupt
+                # the ledger. Reject it instead of losing the movement.
+                raise ValueError(
+                    f"'{product.name}' is stock-tracked and must be billed "
+                    "in whole units")
             description = description or product.name
             unit = product.unit
             unit_cost = product.purchase_cost_paisa
@@ -181,7 +189,17 @@ def create_invoice(db: Session, data: dict, user, from_job: bool = False) -> dic
     calc = _totals(items_data, int(data.get("invoice_discount_paisa") or 0),
                    tax_rate, tax_enabled)
 
-    paid_total = sum(int(p["amount_paisa"]) for p in data.get("payments", []))
+    from ..core.constants import PAYMENT_KINDS, PAYMENT_METHODS
+    paid_total = 0
+    for p in data.get("payments", []):
+        amount = int(p["amount_paisa"])
+        if amount <= 0:
+            raise ValueError("Payment amount must be positive")
+        if p.get("method", "cash") not in PAYMENT_METHODS:
+            raise ValueError(f"Unknown payment method '{p.get('method')}'")
+        if p.get("kind", "sale_payment") not in PAYMENT_KINDS:
+            raise ValueError(f"Unknown payment kind '{p.get('kind')}'")
+        paid_total += amount
     if paid_total > calc["total_paisa"]:
         raise ValueError("Total payment exceeds the invoice amount — use a customer advance instead")
 
@@ -283,8 +301,8 @@ def invoice_detail(db: Session, inv: Invoice) -> dict:
         "status": inv.status, "is_credit": inv.is_credit,
         "payment_method_summary": inv.payment_method_summary,
         "cashier_id": inv.cashier_id,
-        "cashier_name": (db.get(__import__("app.models", fromlist=["User"]).User,
-                                inv.cashier_id).full_name if inv.cashier_id else None),
+        "cashier_name": (db.get(User, inv.cashier_id).full_name
+                         if inv.cashier_id and db.get(User, inv.cashier_id) else None),
         "return_amount_paisa": inv.return_amount_paisa,
         "credited_amount_paisa": inv.credited_amount_paisa,
         "notes": inv.notes,
@@ -379,6 +397,8 @@ def record_advance(db: Session, customer_id: int, amount_paisa: int, method: str
     customer = db.get(Customer, customer_id)
     if customer is None:
         raise ValueError("Customer does not exist")
+    if amount_paisa <= 0:
+        raise ValueError("Advance amount must be positive")
     from ..services.shift_service import current_shift
     shift = current_shift(db, user.id)
     pay = Payment(customer_id=customer.id, amount_paisa=amount_paisa,
@@ -400,6 +420,8 @@ def record_repayment(db: Session, customer_id: int, amount_paisa: int, method: s
     customer = db.get(Customer, customer_id)
     if customer is None:
         raise ValueError("Customer does not exist")
+    if amount_paisa <= 0:
+        raise ValueError("Repayment amount must be positive")
     remaining = amount_paisa
     allocated = []
     invoices = (db.query(Invoice)
@@ -424,6 +446,8 @@ def record_repayment(db: Session, customer_id: int, amount_paisa: int, method: s
             inv.balance_paisa = 0
             inv.status = "paid"
             inv.is_credit = False
+        elif inv.paid_paisa > 0:
+            inv.status = "partial"
         allocated.append({"invoice_id": inv.id, "invoice_number": inv.invoice_number,
                           "amount_paisa": amt})
         remaining -= amt
@@ -443,6 +467,11 @@ def record_repayment(db: Session, customer_id: int, amount_paisa: int, method: s
 def void_invoice(db: Session, inv: Invoice, reason: str, user) -> Invoice:
     if inv.status == "void":
         raise ValueError("Invoice is already voided")
+    if (db.query(SaleReturn.id)
+            .filter(SaleReturn.invoice_id == inv.id,
+                    SaleReturn.status != "rejected").first()):
+        raise ValueError(
+            "Invoice has sale returns recorded — resolve them before voiding")
     # restore stock for physical product lines (job parts were consumed by the job)
     for item in inv.items:
         if item.item_type == "product" and not item.job_part_id:
@@ -454,12 +483,16 @@ def void_invoice(db: Session, inv: Invoice, reason: str, user) -> Invoice:
                 notes=f"Voided invoice {inv.invoice_number}", created_by=user.id,
                 unit_cost_paisa=item.unit_cost_paisa)
     # reverse every payment on the invoice
+    from ..services.shift_service import current_shift
+    shift = current_shift(db, user.id)
     for pay in inv.payments:
         if pay.amount_paisa > 0:
             db.add(Payment(invoice_id=inv.id, customer_id=inv.customer_id,
                            amount_paisa=-pay.amount_paisa, method=pay.method,
                            kind="reversal", reference=f"VOID {inv.invoice_number}",
-                           notes=f"Reversal of payment #{pay.id}", created_by=user.id))
+                           notes=f"Reversal of payment #{pay.id}",
+                           shift_id=shift.id if shift else None,
+                           created_by=user.id))
     if inv.job_id:
         job = db.get(JobCard, inv.job_id)
         if job and job.invoice_id == inv.id:
@@ -504,6 +537,9 @@ def create_return(db: Session, data: dict, user) -> SaleReturn:
         if ii.item_type != "product":
             raise ValueError("Only product lines can be returned (adjust service invoices manually)")
         qty = float(ri["quantity"])
+        if abs(qty - round(qty)) > 1e-9:
+            raise ValueError(
+                f"Stock-tracked returns must be whole units ('{ii.description}')")
         returnable = _returnable(db, ii.id)
         if qty <= 0 or qty > returnable + 1e-9:
             raise ValueError(
@@ -542,19 +578,35 @@ def decide_return(db: Session, sr: SaleReturn, status: str, notes: str | None,
                 raise ValueError(
                     f"Return quantity for '{item.description}' exceeds remaining returnable quantity ({returnable:g})"
                 )
+    inv = db.get(Invoice, sr.invoice_id)
+    if status == "approved" and sr.refund_method != "credit":
+        # Validate before mutating anything so a rejected decision leaves the
+        # return pending rather than half-applied.
+        if sr.total_paisa > inv.paid_paisa:
+            raise ValueError(
+                "Refund exceeds the amount collected on this invoice — "
+                "use a credit return instead")
     from ..core.security import utcnow
     sr.status = status
     sr.approved_by = user.id
     sr.approved_at = utcnow()
+    if status == "approved":
+        # Persist the split so customer balances and the returns UI can rely
+        # on the same figures that were applied to the invoice.
+        if sr.refund_method == "credit":
+            sr.refund_amount_paisa = 0
+            sr.credit_amount_paisa = sr.total_paisa
+        else:
+            sr.refund_amount_paisa = sr.total_paisa
+            sr.credit_amount_paisa = 0
     if notes:
         sr.notes = f"{sr.notes} | {notes}" if sr.notes else notes
-    inv = db.get(Invoice, sr.invoice_id)
     if status == "approved":
         for item in sr.items:
             if sr.restock_action == "restock" and item.product_id:
                 product = db.get(Product, item.product_id)
                 inventory_service.apply_stock(
-                    db, product, float(item.quantity), movement_type=STOCK_RETURN,
+                    db, product, int(round(float(item.quantity))), movement_type=STOCK_RETURN,
                     reference_type="sale_return", reference_id=sr.id,
                     reference_number=sr.return_number,
                     notes=f"Returned from sale {inv.invoice_number}",
@@ -578,9 +630,11 @@ def decide_return(db: Session, sr: SaleReturn, status: str, notes: str | None,
                            kind="refund", reference=f"REFUND {sr.return_number}",
                            notes=sr.notes, shift_id=shift.id if shift else None,
                            created_by=user.id))
-            # money went back out: reduce collected amount, restore balance
+            # Money went back out: reduce the net collected amount.  Do NOT
+            # recompute the balance from the original total — doing that would
+            # re-open the invoice and make the customer appear to owe the
+            # refunded amount again.
             inv.paid_paisa = max(0, inv.paid_paisa - sr.total_paisa)
-            inv.balance_paisa = inv.total_paisa - inv.paid_paisa
         inv.return_amount_paisa += sr.total_paisa
         if inv.return_amount_paisa >= inv.total_paisa:
             inv.status = "returned"
@@ -620,6 +674,8 @@ def list_returns(db: Session, status: str | None = None, limit: int = 50, offset
             "return_date": r.return_date.isoformat() if r.return_date else None,
             "status": r.status, "restock_action": r.restock_action,
             "total_paisa": r.total_paisa, "refund_method": r.refund_method,
+            "refund_amount_paisa": r.refund_amount_paisa,
+            "credit_amount_paisa": r.credit_amount_paisa,
             "notes": r.notes, "created_by": r.created_by,
             "approved_by": r.approved_by,
             "approved_at": r.approved_at.isoformat() if r.approved_at else None,

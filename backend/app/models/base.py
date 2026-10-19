@@ -555,6 +555,7 @@ class CashShift(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     opened_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     opening_cash_paisa: Mapped[int] = mapped_column(BigInteger, default=0)
+    opening_notes: Mapped[str | None] = mapped_column(String(300), nullable=True)
     expected_cash_paisa: Mapped[int] = mapped_column(BigInteger, default=0)
     counted_cash_paisa: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     difference_paisa: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

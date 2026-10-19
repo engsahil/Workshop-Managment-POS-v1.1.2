@@ -24,7 +24,7 @@ def list_expenses(q: str | None = None, category_id: int | None = None,
                   method: str | None = None, date_from: str | None = None,
                   date_to: str | None = None, page: int = 1,
                   page_size: int = 25, db=Depends(get_db),
-                  _: User = Depends(get_current_user)):
+                  _: User = Depends(require_financial)):
     limit = min(200, max(1, page_size))
     offset = (max(1, page) - 1) * limit
     rows, total = expense_service.list_expenses(
@@ -68,7 +68,7 @@ def delete_expense(eid: int, db=Depends(get_db),
 
 
 @router.get("/expense-categories")
-def list_categories(db=Depends(get_db), _: User = Depends(get_current_user)):
+def list_categories(db=Depends(get_db), _: User = Depends(require_financial)):
     return expense_service.list_categories(db)
 
 
@@ -105,7 +105,7 @@ def open_shift(payload: ShiftOpenIn, db=Depends(get_db),
                user: User = Depends(require_pos)):
     try:
         return shift_service.shift_out(db, shift_service.open_shift(
-            db, user.id, payload.opening_cash_paisa))
+            db, user.id, payload.opening_cash_paisa, payload.opening_notes))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -152,9 +152,12 @@ def close_shift(sid: int, payload: ShiftCloseIn, db=Depends(get_db),
 @router.get("/shifts")
 def list_shifts(user_id: int | None = None, status: str | None = None,
                 page: int = 1, page_size: int = 25, db=Depends(get_db),
-                _: User = Depends(get_current_user)):
+                user: User = Depends(get_current_user)):
     limit = min(200, max(1, page_size))
     offset = (max(1, page) - 1) * limit
+    # Cashiers only see their own drawer history; managers/admin see all.
+    if user.role == "cashier":
+        user_id = user.id
     rows, total = shift_service.list_shifts(
         db, user_id=user_id, status=status, limit=limit, offset=offset)
     return {"items": rows, "total": total, "page": page, "page_size": limit}
@@ -162,7 +165,15 @@ def list_shifts(user_id: int | None = None, status: str | None = None,
 
 @router.get("/shifts/{sid}/ledger")
 def shift_ledger(sid: int, db=Depends(get_db),
-                 _: User = Depends(require_financial)):
+                 user: User = Depends(require_pos)):
+    from ..models import CashShift
+    shift = db.get(CashShift, sid)
+    if shift is None:
+        raise HTTPException(status_code=404, detail="Shift not found")
+    # Cashiers may inspect their own drawer; managers/admins may inspect any.
+    if user.role == "cashier" and shift.user_id != user.id:
+        raise HTTPException(status_code=403,
+                            detail="You can only view your own shift ledger")
     try:
         return shift_service.shift_ledger(db, sid)
     except ValueError as e:

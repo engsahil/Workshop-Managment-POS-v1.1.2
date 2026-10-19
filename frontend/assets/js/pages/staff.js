@@ -14,8 +14,18 @@ export async function renderStaff(root) {
   `;
 
   async function load() {
-    const items = await api.get("/api/mechanics?include_inactive=true");
+    let items;
+    try {
+      items = await api.get("/api/mechanics?include_inactive=true");
+    } catch (err) {
+      const list = root.querySelector("#m-list");
+      if (list && root.isConnected) {
+        list.innerHTML = `<div class="form-error">Could not load mechanics: ${esc(err.message || "Unexpected error")}</div>`;
+      }
+      return;
+    }
     const list = root.querySelector("#m-list");
+    if (!list || !root.isConnected) return;
     if (!items.length) { list.innerHTML = emptyState("No mechanics registered"); return; }
     list.innerHTML = `
       <div class="table-wrap">
@@ -49,8 +59,11 @@ export async function renderStaff(root) {
     });
     list.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
       if (!await confirmDialog("Delete this mechanic record?")) return;
-      await api.del(`/api/mechanics/${b.dataset.del}`);
-      toast("Removed"); load();
+      try {
+        await api.del(`/api/mechanics/${b.dataset.del}`);
+        toast("Removed");
+        load();
+      } catch (err) { toast(err.message, "err"); }
     });
   }
 

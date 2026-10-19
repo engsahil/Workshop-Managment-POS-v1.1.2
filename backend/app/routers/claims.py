@@ -1,7 +1,7 @@
 """Warranty claims."""
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..core.deps import get_current_user, get_db
+from ..core.deps import get_current_user, get_db, require_financial
 from ..models import User, WarrantyClaim
 from ..schemas.claims import ClaimIn, ClaimUpdateIn
 from ..services import claim_service
@@ -33,7 +33,7 @@ def get_claim(cid: int, db=Depends(get_db),
 
 @router.post("")
 def create_claim(payload: ClaimIn, db=Depends(get_db),
-                 user: User = Depends(get_current_user)):
+                 user: User = Depends(require_financial)):
     try:
         c = claim_service.create_claim(db, payload.model_dump(), user.id)
     except ValueError as e:
@@ -43,16 +43,19 @@ def create_claim(payload: ClaimIn, db=Depends(get_db),
 
 @router.put("/{cid}")
 def update_claim(cid: int, payload: ClaimUpdateIn, db=Depends(get_db),
-                 user: User = Depends(get_current_user)):
+                 user: User = Depends(require_financial)):
     c = db.get(WarrantyClaim, cid)
     if c is None:
         raise HTTPException(status_code=404, detail="Claim not found")
-    claim_service.update_claim(db, c, payload.model_dump(exclude_unset=True), user.id)
+    try:
+        claim_service.update_claim(db, c, payload.model_dump(exclude_unset=True), user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return claim_service.claim_out(db, c)
 
 
 @router.delete("/{cid}")
-def delete_claim(cid: int, db=Depends(get_db), _: User = Depends(get_current_user)):
+def delete_claim(cid: int, db=Depends(get_db), _: User = Depends(require_financial)):
     c = db.get(WarrantyClaim, cid)
     if c is None:
         raise HTTPException(status_code=404, detail="Claim not found")

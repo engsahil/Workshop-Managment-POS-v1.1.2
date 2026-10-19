@@ -15,7 +15,10 @@ DEFAULT_BUSINESS = {
     "tagline": "Motorbike & Car Repair • Parts • Accessories",
     "address": "",
     "phone": "",
+    "alt_phone": "",
     "email": "",
+    "tax_ntn": "",
+    "invoice_footer": "",
     "logo_path": "",
     "invoice_prefix": "INV",
     "job_prefix": "JB",
@@ -109,7 +112,4 @@ def seed_defaults(db: Session) -> None:
     if db.query(ExpenseCategory).count() == 0:
         for name in DEFAULT_EXPENSE_CATEGORIES:
             db.add(ExpenseCategory(name=name))
-    bs = get_business_settings(db)
-    if bs["business_name"] == DEFAULT_BUSINESS["business_name"]:
-        pass  # defaults are already applied via get_business_settings fallback
     db.commit()

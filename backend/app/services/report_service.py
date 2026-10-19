@@ -54,13 +54,15 @@ def dashboard(db: Session, date_from: str | None = None, date_to: str | None = N
         if it.item_type == "service"
     )
 
-    pay_q = db.query(Payment).filter(Payment.amount_paisa > 0)
+    # Include reversals/refunds so the dashboard reports the true refund figure.
+    pay_q = db.query(Payment)
     if _from:
         pay_q = pay_q.filter(Payment.created_at >= _from)
     if _to:
         pay_q = pay_q.filter(Payment.created_at <= _to)
     payments = pay_q.all()
-    collections = sum(p.amount_paisa for p in payments if p.kind != "refund")
+    collections = sum(p.amount_paisa for p in payments
+                      if p.amount_paisa > 0 and p.kind != "refund")
     refunds_paid = -sum(p.amount_paisa for p in payments if p.amount_paisa < 0)
 
     cash_received = sum(p.amount_paisa for p in payments if p.method == "cash" and p.amount_paisa > 0)
@@ -103,9 +105,13 @@ def dashboard(db: Session, date_from: str | None = None, date_to: str | None = N
                                                        "on_hold", "completed"))).scalar() or 0)
     jobs_done = db.query(func.count(JobCard.id)).filter(
         JobCard.status.in_(("completed", "ready_for_delivery", "delivered"))).scalar() or 0
-    jobs_delivered_range = db.query(func.count(JobCard.id)).filter(
-        JobCard.status == "delivered",
-        JobCard.updated_at >= _from if _from else True).scalar() or 0
+    jobs_delivered_q = db.query(func.count(JobCard.id)).filter(
+        JobCard.status == "delivered")
+    if _from:
+        jobs_delivered_q = jobs_delivered_q.filter(JobCard.updated_at >= _from)
+    if _to:
+        jobs_delivered_q = jobs_delivered_q.filter(JobCard.updated_at <= _to)
+    jobs_delivered_range = jobs_delivered_q.scalar() or 0
 
     low = low_stock_products(db)
     valuation = inventory_valuation(db)
@@ -166,6 +172,8 @@ def dashboard(db: Session, date_from: str | None = None, date_to: str | None = N
         "collections": {
             "total_paisa": collections, "cash_paisa": cash_received,
             "card_digital_paisa": card_digital,
+            "refunds_paisa": refunds_paid,
+            "net_paisa": collections - refunds_paid,
             "by_method_paisa": by_method,
         },
         "receivables": {
@@ -195,15 +203,16 @@ def dashboard(db: Session, date_from: str | None = None, date_to: str | None = N
 # ---------------------------------------------------------------- sales reports
 def sales_trend(db: Session, date_from: str, date_to: str, group: str = "day") -> list[dict]:
     _from, _to = _range_args(date_from, date_to)
+    dialect_name = db.get_bind().dialect.name if db.get_bind() is not None else None
     rows = (db.query(
-                local_date_expr(Invoice.created_at).label("d"),
+                local_date_expr(Invoice.created_at, dialect_name).label("d"),
                 func.coalesce(func.sum(Invoice.total_paisa), 0),
                 func.count(Invoice.id))
             .filter(Invoice.status != "void")
             .filter(Invoice.created_at >= _from)
             .filter(Invoice.created_at <= _to)
             .group_by("d").order_by("d").all())
-    return [{"date": r[0], "revenue_paisa": int(r[1]), "invoices": r[2]} for r in rows]
+    return [{"date": str(r[0]), "revenue_paisa": int(r[1]), "invoices": r[2]} for r in rows]
 
 
 def sales_by(db: Session, field: str, date_from: str | None = None,
@@ -227,16 +236,24 @@ def sales_by(db: Session, field: str, date_from: str | None = None,
         out = [{"name": r[0], "quantity": float(r[1] or 0), "amount_paisa": int(r[2] or 0)}
                for r in rows]
     elif field == "category":
-        rows = (db.query(Product.name, func.sum(InvoiceItem.line_total_paisa))
-                .join(InvoiceItem, InvoiceItem.product_id == Product.id)
+        from ..models import Category
+        rows = (db.query(func.coalesce(Category.name, "Uncategorised"),
+                         func.sum(InvoiceItem.line_total_paisa))
+                .select_from(InvoiceItem)
                 .join(Invoice, InvoiceItem.invoice_id == Invoice.id)
-                .filter(Invoice.status != "void"))
+                .outerjoin(Product, InvoiceItem.product_id == Product.id)
+                .outerjoin(Category, Product.category_id == Category.id)
+                .filter(Invoice.status != "void",
+                        InvoiceItem.item_type == "product"))
         if _from:
             rows = rows.filter(Invoice.created_at >= _from)
         if _to:
             rows = rows.filter(Invoice.created_at <= _to)
-        rows = rows.group_by(Product.name).order_by(func.sum(InvoiceItem.line_total_paisa).desc()).limit(100).all()
-        out = [{"name": r[0], "quantity": None, "amount_paisa": int(r[1] or 0)} for r in rows]
+        rows = (rows.group_by(Category.name)
+                .order_by(func.sum(InvoiceItem.line_total_paisa).desc())
+                .limit(100).all())
+        out = [{"name": r[0], "quantity": None, "amount_paisa": int(r[1] or 0)}
+               for r in rows]
     elif field == "cashier":
         rows = (db.query(User.full_name, func.sum(Invoice.total_paisa),
                          func.count(Invoice.id))
@@ -248,6 +265,25 @@ def sales_by(db: Session, field: str, date_from: str | None = None,
             rows = rows.filter(Invoice.created_at <= _to)
         rows = rows.group_by(User.full_name).all()
         out = [{"name": r[0], "quantity": r[2], "amount_paisa": int(r[1] or 0)} for r in rows]
+    elif field == "brand":
+        from ..models import Brand
+        rows = (db.query(func.coalesce(Brand.name, "Unbranded"),
+                         func.sum(InvoiceItem.line_total_paisa))
+                .select_from(InvoiceItem)
+                .join(Invoice, InvoiceItem.invoice_id == Invoice.id)
+                .outerjoin(Product, InvoiceItem.product_id == Product.id)
+                .outerjoin(Brand, Product.brand_id == Brand.id)
+                .filter(Invoice.status != "void",
+                        InvoiceItem.item_type == "product"))
+        if _from:
+            rows = rows.filter(Invoice.created_at >= _from)
+        if _to:
+            rows = rows.filter(Invoice.created_at <= _to)
+        rows = (rows.group_by(Brand.name)
+                .order_by(func.sum(InvoiceItem.line_total_paisa).desc())
+                .limit(100).all())
+        out = [{"name": r[0], "quantity": None, "amount_paisa": int(r[1] or 0)}
+               for r in rows]
     elif field == "method":
         rows = (db.query(Payment.method, func.sum(Payment.amount_paisa),
                          func.count(Payment.id))
@@ -279,26 +315,35 @@ def profit_report(db: Session, date_from: str | None = None,
     invoices = inv_q.all()
     revenue = sum(i.total_paisa for i in invoices)
     cogs = sum(i.cost_of_goods_paisa for i in invoices)
-    labor = (db.query(func.coalesce(func.sum(InvoiceItem.line_total_paisa), 0))
-             .join(Invoice, InvoiceItem.invoice_id == Invoice.id)
-             .filter(Invoice.status != "void", InvoiceItem.item_type == "service"))
+    parts_revenue = sum(
+        it.line_total_paisa for i in invoices for it in i.items
+        if it.item_type == "product"
+    )
+    labor_q = (db.query(func.coalesce(func.sum(InvoiceItem.line_total_paisa), 0))
+               .join(Invoice, InvoiceItem.invoice_id == Invoice.id)
+               .filter(Invoice.status != "void", InvoiceItem.item_type == "service"))
     if _from:
-        labor = labor.filter(Invoice.created_at >= _from)
+        labor_q = labor_q.filter(Invoice.created_at >= _from)
     if _to:
-        labor = labor.filter(Invoice.created_at <= _to)
-    labor = labor.scalar() or 0
+        labor_q = labor_q.filter(Invoice.created_at <= _to)
+    labor = labor_q.scalar() or 0
     exp_q = db.query(func.coalesce(func.sum(Expense.amount_paisa), 0))
     if _from:
         exp_q = exp_q.filter(Expense.expense_date >= _from)
     if _to:
         exp_q = exp_q.filter(Expense.expense_date <= _to)
     expenses = exp_q.scalar() or 0
-    returns_value = (db.query(func.coalesce(func.sum(SaleReturn.total_paisa), 0))
-                     .filter(SaleReturn.status == "approved")
-                     .scalar() or 0)
+    returns_q = (db.query(func.coalesce(func.sum(SaleReturn.total_paisa), 0))
+                 .filter(SaleReturn.status == "approved"))
+    if _from:
+        returns_q = returns_q.filter(SaleReturn.return_date >= _from)
+    if _to:
+        returns_q = returns_q.filter(SaleReturn.return_date <= _to)
+    returns_value = returns_q.scalar() or 0
     gross = revenue - cogs - returns_value
     return {
-        "revenue_paisa": revenue, "labor_revenue_paisa": labor,
+        "revenue_paisa": revenue, "parts_revenue_paisa": parts_revenue,
+        "labor_revenue_paisa": labor,
         "cogs_paisa": cogs, "returns_value_paisa": returns_value,
         "gross_profit_paisa": gross, "expenses_paisa": int(expenses),
         "net_profit_paisa": gross - int(expenses),
@@ -371,6 +416,10 @@ def customer_statement(db: Session, customer_id: int,
                      "note": f"{p.kind} via {p.method}", "status": "ok"})
     rq = db.query(SaleReturn).filter(SaleReturn.customer_id == customer_id,
                                      SaleReturn.status == "approved")
+    if date_from:
+        rq = rq.filter(SaleReturn.return_date >= date_from)
+    if date_to:
+        rq = rq.filter(SaleReturn.return_date <= date_to)
     for r in rq.all():
         rows.append({"date": r.return_date.isoformat() if r.return_date else None,
                      "type": "return", "ref": r.return_number,
@@ -452,12 +501,13 @@ def mechanic_performance(db: Session, date_from: str | None = None,
             "labor_revenue_paisa": int(labor_total),
             "commission_type": m.commission_type,
             "commission_value": m.commission_value,
-            "commission_due_paisa": _commission_due(m, jobs_done, int(labor_total)),
+            "commission_due_paisa": commission_due(m, jobs_done, int(labor_total)),
         })
     return out
 
 
-def _commission_due(m: Mechanic, jobs_done: int, labor_total: int) -> int:
+def commission_due(m: Mechanic, jobs_done: int, labor_total: int) -> int:
+    """Commission owed for a mechanic (percent stored as percent*100)."""
     if m.commission_type == "percent_per_job":
         return int(labor_total * m.commission_value / 10000)  # value stored as percent*100
     if m.commission_type == "fixed_per_job":
@@ -514,7 +564,8 @@ def tax_summary(db: Session, date_from: str | None = None, date_to: str | None =
 
 def overdue_credit(db: Session) -> list[dict]:
     """Credit invoices unpaid for more than 7 days."""
-    cutoff = datetime.now() - timedelta(days=7)
+    from ..core.security import utcnow
+    cutoff = utcnow() - timedelta(days=7)
     rows = (db.query(Invoice).filter(Invoice.balance_paisa > 0,
                                      Invoice.status.in_(("partial", "credit", "returned")),
                                      Invoice.created_at < cutoff)

@@ -40,14 +40,23 @@ def _extract_date_str(val: str | date | datetime | None) -> str | None:
     return s[:10]
 
 
-def range_utc(date_from: str | None, date_to: str | None) -> tuple[str | None, str | None]:
-    """Convert local date bounds (YYYY-MM-DD) into naive-UTC ISO bounds."""
+def range_utc(date_from: str | date | datetime | None,
+              date_to: str | date | datetime | None
+              ) -> tuple[datetime | None, datetime | None]:
+    """Convert local date bounds (YYYY-MM-DD) into naive-UTC datetime bounds.
+
+    The returned values are real ``datetime`` objects so SQLAlchemy binds them
+    as TIMESTAMP parameters.  Returning ISO strings here used to work on
+    SQLite (which compares datetimes lexicographically) but made PostgreSQL
+    fail with ``operator does not exist: timestamp without time zone >=
+    character varying``.
+    """
     df = _extract_date_str(date_from)
     dt = _extract_date_str(date_to)
     if not df and not dt:
         return None, None
     t = tz()
-    out = []
+    out: list[datetime | None] = []
     for d, end_of_day in ((df, False), (dt, True)):
         if not d:
             out.append(None)
@@ -63,7 +72,7 @@ def range_utc(date_from: str | None, date_to: str | None) -> tuple[str | None, s
             local = datetime(parsed_date.year, parsed_date.month, parsed_date.day,
                              0, 0, 0, tzinfo=t)
         utc = local.astimezone(timezone.utc).replace(tzinfo=None)
-        out.append(utc.isoformat(sep=" "))
+        out.append(utc)
     return out[0], out[1]
 
 
@@ -95,12 +104,20 @@ def ensure_datetime(val: str | date | datetime | None,
         raise ValueError(f"Invalid date value '{val}'") from exc
 
 
-def local_date_expr(column):
-    """SQL expression that groups a UTC datetime column by local date."""
+def local_date_expr(column, dialect_name: str | None = None):
+    """SQL expression that groups a UTC datetime column by local date.
+
+    SQLite supports ``date(column, '+N seconds')`` while PostgreSQL needs
+    ``CAST(column + INTERVAL 'N seconds' AS DATE)``.  Passing the session
+    dialect keeps reports working on both backends.
+    """
     offset = datetime.now(tz()).utcoffset()
     seconds = int(offset.total_seconds()) if offset else 18000
-    from sqlalchemy import func
-    return func.date(column, f"+{seconds} seconds")
+    if (dialect_name or "").startswith("sqlite"):
+        from sqlalchemy import func
+        return func.date(column, f"+{seconds} seconds")
+    from sqlalchemy import Date, cast, text
+    return cast(column + text(f"INTERVAL '{seconds} seconds'"), Date)
 
 
 def today_local() -> str:

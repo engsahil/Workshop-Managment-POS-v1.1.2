@@ -28,9 +28,13 @@ def create_customer(payload: CustomerIn, db=Depends(get_db),
                     user: User = Depends(get_current_user)):
     dup = customer_service.find_duplicate(db, payload.name, payload.phone)
     if dup:
-        raise HTTPException(status_code=409,
-                            detail=f"A customer named '{payload.name}' with phone "
-                                   f"{payload.phone} already exists (code {dup.code})")
+        same_name = (dup.name or "").strip().lower() == (payload.name or "").strip().lower()
+        label = "name and phone" if same_name else "phone"
+        raise HTTPException(
+            status_code=409,
+            detail=(f"A customer with this {label} already exists: "
+                    f"'{dup.name}' ({dup.code}). Use the existing record or "
+                    "update the phone number."))
     c = customer_service.create_customer(db, payload.model_dump(), user.id)
     return customer_service.enrich(db, c)
 
@@ -56,7 +60,16 @@ def update_customer(cid: int, payload: CustomerUpdateIn, db=Depends(get_db),
     c = customer_service.get_customer(db, cid)
     if c is None:
         raise HTTPException(status_code=404, detail="Customer not found")
-    customer_service.update_customer(db, c, payload.model_dump(exclude_unset=True))
+    data = payload.model_dump(exclude_unset=True)
+    if "phone" in data and data["phone"]:
+        dup = customer_service.find_duplicate(db, data.get("name") or c.name,
+                                              data["phone"], exclude_id=c.id)
+        if dup:
+            raise HTTPException(
+                status_code=409,
+                detail=(f"This phone number already belongs to "
+                        f"'{dup.name}' ({dup.code})."))
+    customer_service.update_customer(db, c, data, user_id=_.id)
     return customer_service.enrich(db, c)
 
 
@@ -66,7 +79,7 @@ def delete_customer(cid: int, db=Depends(get_db), _: User = Depends(get_current_
     if c is None:
         raise HTTPException(status_code=404, detail="Customer not found")
     try:
-        customer_service.delete_customer(db, c)
+        customer_service.delete_customer(db, c, user_id=_.id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True}

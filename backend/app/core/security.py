@@ -104,4 +104,11 @@ def token_expired(payload: dict) -> bool:
 
 # ---------- misc ----------
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    """Current UTC time as a *naive* datetime.
+
+    Every DateTime column in the schema is ``TIMESTAMP WITHOUT TIME ZONE``,
+    so handing SQLAlchemy an aware value makes PostgreSQL reinterpret it
+    against the session time zone while SQLite silently drops the offset.
+    Returning naive UTC keeps both backends storing the same instant.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)

@@ -69,6 +69,16 @@ class ExpenseUpdateIn(BaseModel):
 
 class ShiftOpenIn(BaseModel):
     opening_cash_paisa: int = Field(ge=0)
+    opening_notes: str | None = Field(default=None, max_length=300)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_notes_alias(cls, data):
+        # Older clients (and the v1.2.2 UI) send the field as "notes".
+        if isinstance(data, dict) and "opening_notes" not in data and "notes" in data:
+            data = dict(data)
+            data["opening_notes"] = data.get("notes")
+        return data
 
 
 class CashMovementIn(BaseModel):
@@ -90,10 +100,13 @@ class CustomerAdvanceIn(BaseModel):
     reference: str | None = Field(default=None, max_length=120)
     notes: str | None = None
 
+    @field_validator("method")
+    @classmethod
+    def method_ok(cls, v):
+        if v not in PAYMENT_METHODS:
+            raise ValueError("Unknown payment method")
+        return v
 
-class RepaymentIn(BaseModel):
-    customer_id: int
-    amount_paisa: int = Field(gt=0)
-    method: str = "cash"
-    reference: str | None = Field(default=None, max_length=120)
-    notes: str | None = None
+
+class RepaymentIn(CustomerAdvanceIn):
+    pass

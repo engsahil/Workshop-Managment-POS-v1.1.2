@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..models import Customer, Vehicle, Invoice, Payment, SaleReturn
+from ..models import Customer, Vehicle, Invoice, Payment, SaleReturn, JobCard
 
 
 def _balance(db: Session, customer_id: int) -> int:
@@ -71,11 +71,30 @@ def list_customers(db: Session, q: str | None = None, limit: int = 50, offset: i
     return [enrich(db, c) for c in rows]
 
 
-def find_duplicate(db: Session, name: str, phone: str | None) -> Customer | None:
+def find_duplicate(db: Session, name: str, phone: str | None,
+                   exclude_id: int | None = None) -> Customer | None:
+    """Find an existing customer with the same phone number.
+
+    Phones are compared digit-by-digit so "0300-1234567" and "03001234567"
+    are recognised as the same number instead of creating a duplicate.
+    """
     if phone and phone.strip():
-        row = db.query(Customer).filter(Customer.phone == phone.strip()).first()
-        if row:
-            return row
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        if digits:
+            expr = Customer.phone
+            for ch in (" ", "-", "(", ")", ".", "+"):
+                expr = func.replace(expr, ch, "")
+            # Compare the national part only: 0300-1234567 == +92 300 1234567.
+            if len(digits) >= 10:
+                key_expr = func.substr(expr, func.length(expr) - 9)
+                q = db.query(Customer).filter(key_expr == digits[-10:])
+            else:
+                q = db.query(Customer).filter(expr == digits)
+            if exclude_id:
+                q = q.filter(Customer.id != exclude_id)
+            row = q.first()
+            if row:
+                return row
     return None
 
 
@@ -108,20 +127,21 @@ def create_customer(db: Session, data: dict, created_by: int | None = None) -> C
     return c
 
 
-def update_customer(db: Session, c: Customer, data: dict) -> Customer:
+def update_customer(db: Session, c: Customer, data: dict,
+                    user_id: int | None = None) -> Customer:
     cleaned = _clean_customer_dict(data)
     for k, v in cleaned.items():
         if v is not None or k in ("phone", "alt_phone", "address", "cnic", "notes"):
             setattr(c, k, v)
     db.commit()
     from .audit_service import log as _audit
-    _audit(db, user_id=None, username=None,
+    _audit(db, user_id=user_id, username=None,
            action="customer.update", entity_type="customer",
            entity_id=c.id, new_values={"name": c.name, "phone": c.phone})
     return c
 
 
-def delete_customer(db: Session, c: Customer) -> None:
+def delete_customer(db: Session, c: Customer, user_id: int | None = None) -> None:
     """Only allowed when the customer has no business history."""
     has_inv = db.query(Invoice.id).filter(Invoice.customer_id == c.id).first()
     has_veh = db.query(Vehicle.id).filter(Vehicle.customer_id == c.id).first()
@@ -132,7 +152,7 @@ def delete_customer(db: Session, c: Customer) -> None:
     db.delete(c)
     db.commit()
     from .audit_service import log as _audit
-    _audit(db, user_id=None, username=None,
+    _audit(db, user_id=user_id, username=None,
            action="customer.delete", entity_type="customer",
            entity_id=cid, old_values={"name": cname})
 
@@ -141,8 +161,8 @@ def customer_history(db: Session, cid: int) -> dict:
     invoices = db.query(Invoice).filter(Invoice.customer_id == cid).order_by(Invoice.id.desc()).limit(50).all()
     payments = db.query(Payment).filter(Payment.customer_id == cid).order_by(Payment.id.desc()).limit(50).all()
     vehicles = db.query(Vehicle).filter(Vehicle.customer_id == cid).all()
-    jobs = db.query(JobCardLite := __import__("app.models", fromlist=["JobCard"]).JobCard).filter(
-        JobCardLite.customer_id == cid).order_by(JobCardLite.id.desc()).limit(20).all()
+    jobs = (db.query(JobCard).filter(JobCard.customer_id == cid)
+            .order_by(JobCard.id.desc()).limit(20).all())
     return {
         "invoices": [_mini_inv(i) for i in invoices],
         "payments": [_mini_pay(p) for p in payments],

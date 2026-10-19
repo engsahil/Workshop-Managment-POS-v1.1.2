@@ -6,7 +6,10 @@ from ..core.constants import JOB_PRIORITIES
 
 class JobServiceIn(BaseModel):
     service_id: int | None = None
-    description: str = Field(min_length=1, max_length=240)
+    # Optional when a catalog service is linked — its name becomes the
+    # description. A free-text line still requires one (enforced in the service
+    # layer so partial PUT updates keep working).
+    description: str | None = Field(default=None, max_length=240)
     quantity: int = Field(default=1, ge=1)
     unit_charge_paisa: int = Field(default=0, ge=0)
     discount_paisa: int = Field(default=0, ge=0)

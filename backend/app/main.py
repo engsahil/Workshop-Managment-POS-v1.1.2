@@ -20,14 +20,27 @@ from .services.settings_service import seed_defaults
 log = logging.getLogger("awp")
 
 
+_LOG_FILE_HANDLER: logging.FileHandler | None = None
+
+
 def configure_logging():
+    """Attach the rotating log file once per process.
+
+    ``create_app()`` is called by the server *and* by the test-suite factory,
+    so adding a handler unconditionally leaked a new open file handle (and
+    duplicated every log line) on each call.
+    """
+    global _LOG_FILE_HANDLER
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    if _LOG_FILE_HANDLER is not None:
+        return
     handler = logging.FileHandler(LOG_DIR / "app.log", encoding="utf-8")
     handler.setFormatter(logging.Formatter(
         "%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    root = logging.getLogger()
-    root.setLevel(logging.INFO)
     root.addHandler(handler)
+    _LOG_FILE_HANDLER = handler
 
 
 @asynccontextmanager

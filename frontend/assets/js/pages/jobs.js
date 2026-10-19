@@ -1,5 +1,5 @@
 // Workshop Service Jobs — check-in, estimates, approvals, status workflow, labor, parts, final billing & printable job card.
-import { api } from "../core/api.js";
+import { api, auth } from "../core/api.js";
 import { appState, refreshHeaderContext } from "../core/app.js";
 import { badge, confirmDialog, emptyState, esc, fmtDate, fmtDateTime, formData, money, openModal, printDocument, toast, toPaisa } from "../core/ui.js";
 import { openQuickCustomerModal } from "./customers.js";
@@ -370,8 +370,12 @@ async function openJobDetail(jid, onListRefresh) {
           ${["not_required", "pending", "approved", "rejected"].map(a => `<option value="${a}" ${job.approval_status === a ? "selected" : ""}>Approval: ${a.replace(/_/g, " ")}</option>`).join("")}
         </select>
         ${!job.invoice_id && (job.services.length + job.parts.length > 0)
-          ? `<button class="btn btn-primary btn-sm" id="jd-bill">Generate Final Bill</button>`
-          : job.invoice_id ? `<a class="btn btn-success btn-sm" href="#/invoices?id=${job.invoice_id}" data-close>View Invoice</a>` : ""}
+          ? (auth.hasRole("admin", "manager", "cashier")
+              ? `<button class="btn btn-primary btn-sm" id="jd-bill">Generate Final Bill</button>`
+              : `<span class="muted">Billing is handled by the counter</span>`)
+          : job.invoice_id ? (auth.hasRole("admin", "manager", "cashier")
+              ? `<a class="btn btn-success btn-sm" href="#/invoices?id=${job.invoice_id}" data-close>View Invoice</a>`
+              : "") : ""}
       </div>
 
       <div class="grid-2">

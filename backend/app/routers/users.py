@@ -46,6 +46,17 @@ def update_user(user_id: int, payload: UserUpdateIn, db=Depends(get_db),
         raise HTTPException(status_code=400,
                             detail="You cannot deactivate your own account")
     data = payload.model_dump(exclude_unset=True)
+    loses_admin = (user.role == "admin" and
+                   (data.get("role") not in (None, "admin") or
+                    data.get("is_active") is False))
+    if loses_admin:
+        others = (db.query(User)
+                  .filter(User.id != user.id, User.role == "admin",
+                          User.is_active.is_(True)).count())
+        if others == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one active administrator must remain")
     auth_service.update_user(db, user, changed_by=admin.id, **data)
     return _out(user)
 

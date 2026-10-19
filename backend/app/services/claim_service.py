@@ -115,24 +115,34 @@ def claim_out(db: Session, c: WarrantyClaim) -> dict:
     }
 
 
+_REF_FIELDS = (
+    ("customer_id", Customer, "Customer"),
+    ("vehicle_id", Vehicle, "Vehicle"),
+    ("invoice_id", Invoice, "Invoice"),
+    ("job_id", JobCard, "Job card"),
+    ("product_id", Product, "Product"),
+    ("service_id", ServiceModel, "Service"),
+)
+
+
+def _check_refs(db: Session, data: dict) -> None:
+    """Reject references to records that do not exist.
+
+    Both create and update run through this so a claim can never be
+    re-pointed at a missing customer, invoice or part.
+    """
+    for key, model, label in _REF_FIELDS:
+        value = data.get(key)
+        if value is not None and db.get(model, value) is None:
+            raise ValueError(f"{label} does not exist")
+
+
 def create_claim(db: Session, data: dict, user_id: int | None = None) -> WarrantyClaim:
     cleaned = dict(data)
-    if cleaned.get("customer_id") and not db.get(Customer, cleaned["customer_id"]):
-        raise ValueError("Customer does not exist")
-    if cleaned.get("vehicle_id") and not db.get(Vehicle, cleaned["vehicle_id"]):
-        raise ValueError("Vehicle does not exist")
+    _check_refs(db, cleaned)
     inv = db.get(Invoice, cleaned["invoice_id"]) if cleaned.get("invoice_id") else None
-    if cleaned.get("invoice_id") and not inv:
-        raise ValueError("Invoice does not exist")
     job = db.get(JobCard, cleaned["job_id"]) if cleaned.get("job_id") else None
-    if cleaned.get("job_id") and not job:
-        raise ValueError("Job card does not exist")
     prod = db.get(Product, cleaned["product_id"]) if cleaned.get("product_id") else None
-    if cleaned.get("product_id") and not prod:
-        raise ValueError("Product does not exist")
-    svc = db.get(ServiceModel, cleaned["service_id"]) if cleaned.get("service_id") else None
-    if cleaned.get("service_id") and not svc:
-        raise ValueError("Service does not exist")
 
     if not cleaned.get("customer_id"):
         if inv and inv.customer_id:
@@ -180,6 +190,7 @@ def create_claim(db: Session, data: dict, user_id: int | None = None) -> Warrant
 
 
 def update_claim(db: Session, c: WarrantyClaim, data: dict, user_id: int | None = None) -> WarrantyClaim:
+    _check_refs(db, data)
     old_status = c.status
     for k, v in data.items():
         if k == "purchase_date" and v is not None:
