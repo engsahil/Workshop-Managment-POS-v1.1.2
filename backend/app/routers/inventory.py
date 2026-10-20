@@ -33,7 +33,7 @@ def list_products(q: str | None = None, category_id: int | None = None,
 
 @router.post("/products")
 def create_product(payload: ProductIn, db=Depends(get_db),
-                   _: User = Depends(get_current_user)):
+                   _: User = Depends(require_financial)):
     try:
         p = inventory_service.create_product(db, payload.model_dump())
     except ValueError as e:
@@ -53,7 +53,7 @@ def get_product(pid: int, db=Depends(get_db), _: User = Depends(get_current_user
 
 @router.put("/products/{pid}")
 def update_product(pid: int, payload: ProductUpdateIn, db=Depends(get_db),
-                   _: User = Depends(get_current_user)):
+                   _: User = Depends(require_financial)):
     p = inventory_service.get_product(db, pid)
     if p is None:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -65,7 +65,7 @@ def update_product(pid: int, payload: ProductUpdateIn, db=Depends(get_db),
 
 
 @router.delete("/products/{pid}")
-def delete_product(pid: int, db=Depends(get_db), _: User = Depends(get_current_user)):
+def delete_product(pid: int, db=Depends(get_db), _: User = Depends(require_financial)):
     p = inventory_service.get_product(db, pid)
     if p is None:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -88,7 +88,7 @@ def export_products_csv(db=Depends(get_db), _: User = Depends(get_current_user))
 
 @router.post("/products/import/csv")
 def import_products_csv(file: UploadFile = File(...), db=Depends(get_db),
-                        _: User = Depends(get_current_user)):
+                        _: User = Depends(require_financial)):
     if not (file.filename or "").lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are accepted")
     try:
@@ -122,7 +122,7 @@ def list_categories(db=Depends(get_db), _: User = Depends(get_current_user)):
 
 @router.post("/categories")
 def create_category(payload: dict, db=Depends(get_db),
-                    _: User = Depends(get_current_user)):
+                    _: User = Depends(require_financial)):
     try:
         return inventory_service.create_category(db, payload.get("name", ""))
     except ValueError as e:
@@ -130,7 +130,7 @@ def create_category(payload: dict, db=Depends(get_db),
 
 
 @router.delete("/categories/{cid}")
-def delete_category(cid: int, db=Depends(get_db), _: User = Depends(get_current_user)):
+def delete_category(cid: int, db=Depends(get_db), _: User = Depends(require_financial)):
     try:
         inventory_service.delete_category(db, cid)
     except ValueError as e:
@@ -144,7 +144,7 @@ def list_brands(db=Depends(get_db), _: User = Depends(get_current_user)):
 
 
 @router.post("/brands")
-def create_brand(payload: dict, db=Depends(get_db), _: User = Depends(get_current_user)):
+def create_brand(payload: dict, db=Depends(get_db), _: User = Depends(require_financial)):
     try:
         return inventory_service.create_brand(db, payload.get("name", ""))
     except ValueError as e:
@@ -152,7 +152,7 @@ def create_brand(payload: dict, db=Depends(get_db), _: User = Depends(get_curren
 
 
 @router.delete("/brands/{bid}")
-def delete_brand(bid: int, db=Depends(get_db), _: User = Depends(get_current_user)):
+def delete_brand(bid: int, db=Depends(get_db), _: User = Depends(require_financial)):
     try:
         inventory_service.delete_brand(db, bid)
     except ValueError as e:
@@ -176,7 +176,7 @@ def adjust_stock(payload: StockAdjustmentIn, db=Depends(get_db),
 
 @router.post("/inventory/receive")
 def receive_stock(payload: StockReceiveIn, db=Depends(get_db),
-                  user: User = Depends(get_current_user)):
+                  user: User = Depends(require_financial)):
     try:
         mv = inventory_service.receive_stock(
             db, product_id=payload.product_id, quantity=payload.quantity,

@@ -116,6 +116,7 @@ def upgrade_schema(eng) -> None:
         ("job_cards", "warranty_days", "INTEGER DEFAULT 0"),
         ("warranty_claims", "inspection_notes", "TEXT"),
         ("warranty_claims", "action_taken", "VARCHAR(80)"),
+        ("cash_shifts", "opening_notes", "VARCHAR(300)"),
     ]
     with eng.begin() as conn:
         for table, col, col_def in migrations:

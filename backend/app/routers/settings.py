@@ -8,9 +8,10 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from ..core.config import DATA_DIR
 from ..core.constants import ROLE_ADMIN
-from ..core.deps import get_current_user, get_db, require_admin
+from ..core.deps import (get_current_user, get_db, require_admin,
+                         require_report)
 from ..models import AuditLog, Notification, User
-from ..schemas.settings import BusinessSettingsIn, LegalIn, LegalOut
+from ..schemas.settings import BusinessSettingsIn
 from ..services import backup_service, notification_service
 from ..services.audit_service import log as audit_log
 from ..services.settings_service import (get_business_settings,
@@ -111,12 +112,18 @@ def get_legal(key: str, db=Depends(get_db)):
 
 
 @router.put("/settings/legal/{key}")
-def update_legal(key: str, payload: LegalIn, db=Depends(get_db),
+def update_legal(key: str, payload: dict, db=Depends(get_db),
                  admin: User = Depends(require_admin)):
     if key not in LEGAL_KEYS:
         raise HTTPException(status_code=404, detail="Unknown legal document")
     from ..services.settings_service import set_setting
-    set_setting(db, f"legal.{key}", payload.content)
+    # Accept both {"title", "content"} (documented contract) and a bare
+    # {"content"} body; the title is derived from the document key.
+    content = (payload or {}).get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise HTTPException(status_code=422,
+                            detail="content: Legal document content is required")
+    set_setting(db, f"legal.{key}", content)
     db.commit()
     audit_log(db, user_id=admin.id, username=admin.username,
               action="settings.legal.update", entity_type="legal", entity_id=key)
@@ -141,7 +148,7 @@ def update_notification_settings(payload: dict, db=Depends(get_db),
 
 @router.get("/reports/daily-summary")
 def get_reports_daily_summary(date: str | None = None, db=Depends(get_db),
-                              _: User = Depends(get_current_user)):
+                              _: User = Depends(require_report)):
     try:
         return notification_service.daily_summary_data(db, date)
     except ValueError as e:
@@ -152,7 +159,7 @@ def get_reports_daily_summary(date: str | None = None, db=Depends(get_db),
 def post_reports_daily_summary_notify(date: str | None = None,
                                       payload: dict | None = None,
                                       db=Depends(get_db),
-                                      _: User = Depends(get_current_user)):
+                                      _: User = Depends(require_report)):
     target_date = date or ((payload or {}).get("date") if isinstance(payload, dict) else None)
     try:
         summary, notif = notification_service.generate_daily_summary_notification(db, target_date)
@@ -170,13 +177,14 @@ def notifications(limit: int = 50, unread_only: bool = False,
                   db=Depends(get_db), _: User = Depends(get_current_user)):
     rows = notification_service.list_notifications(db, limit=limit,
                                                        unread_only=unread_only)
+    unread = notification_service.unread_count(db)
     return {"items": [
         {"id": n.id, "type": n.type, "title": n.title, "message": n.message,
          "related_type": n.related_type, "related_id": n.related_id,
          "is_read": n.is_read,
          "created_at": n.created_at.isoformat() if n.created_at else None}
         for n in rows],
-        "unread_count": notification_service.unread_count(db)}
+        "unread_count": unread, "unread": unread}
 
 
 @router.post("/notifications/read")
@@ -192,18 +200,22 @@ def mark_all_read(db=Depends(get_db), _: User = Depends(get_current_user)):
 
 
 @router.get("/notifications/daily-summary")
-def get_daily_summary(date: str | None = None, db=Depends(get_db),
-                      _: User = Depends(get_current_user)):
+def get_daily_summary(date: str | None = None, for_date: str | None = None,
+                      db=Depends(get_db),
+                      _: User = Depends(require_report)):
     try:
-        return notification_service.daily_summary_data(db, date)
+        return notification_service.daily_summary_data(db, date or for_date)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/notifications/daily-summary")
-def create_daily_summary(payload: dict | None = None, db=Depends(get_db),
-                         _: User = Depends(get_current_user)):
-    target_date = (payload or {}).get("date") if isinstance(payload, dict) else None
+def create_daily_summary(payload: dict | None = None,
+                         date: str | None = None, for_date: str | None = None,
+                         db=Depends(get_db),
+                         _: User = Depends(require_report)):
+    target_date = (date or for_date or
+                   ((payload or {}).get("date") if isinstance(payload, dict) else None))
     try:
         summary, notif = notification_service.generate_daily_summary_notification(db, target_date)
     except ValueError as e:
@@ -228,16 +240,17 @@ def audit_log_list(action: str | None = None, entity_type: str | None = None,
         q = q.filter(AuditLog.entity_type.ilike(f"%{entity_type}%"))
     if user_id:
         q = q.filter(AuditLog.user_id == user_id)
+    limit = min(200, max(1, page_size))
     total = q.count()
     rows = (q.order_by(AuditLog.id.desc())
-            .offset((max(1, page) - 1) * 50).limit(50).all())
+            .offset((max(1, page) - 1) * limit).limit(limit).all())
     return {"items": [{
         "id": a.id, "user_id": a.user_id, "username": a.username,
         "action": a.action, "entity_type": a.entity_type,
         "entity_id": a.entity_id, "old_values": a.old_values,
         "new_values": a.new_values, "ip_address": a.ip_address,
         "created_at": a.created_at.isoformat() if a.created_at else None,
-    } for a in rows], "total": total}
+    } for a in rows], "total": total, "page": page, "page_size": limit}
 
 
 # ---------------------------------------------------------------- backups

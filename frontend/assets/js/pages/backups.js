@@ -1,5 +1,5 @@
 // Backups & Restore — SQLite hot backup, upload & schema validation, safe pre-restore backup, and JSON export.
-import { api, auth } from "../core/api.js";
+import { api } from "../core/api.js";
 import { confirmDialog, emptyState, esc, fmtDateTime, toast } from "../core/ui.js";
 
 export async function renderBackups(root) {
@@ -17,12 +17,12 @@ export async function renderBackups(root) {
     <div class="card mb-3">
       <div class="card-head">
         <div>
-          <h3 class="card-title">Upload &amp; Validate External Backup (.db)</h3>
-          <div class="card-sub">Upload a SQLite .db backup file to verify its integrity and required schema tables before restoring.</div>
+          <h3 class="card-title">Upload &amp; Validate External Backup</h3>
+          <div class="card-sub">Upload a SQLite .db backup (or Auto Workshop JSON snapshot) to verify its integrity and required tables.</div>
         </div>
       </div>
       <div class="flex">
-        <input type="file" id="bk-file" accept=".db,.sqlite,.sqlite3" style="max-width:340px" />
+        <input type="file" id="bk-file" accept=".db,.sqlite,.sqlite3,.json" style="max-width:340px" />
         <button class="btn btn-ghost btn-sm" id="bk-upload-val">Upload &amp; Validate</button>
         <button class="btn btn-danger btn-sm" id="bk-upload-rest" disabled>Restore Uploaded Backup</button>
       </div>
@@ -43,13 +43,15 @@ export async function renderBackups(root) {
           <tbody>
             ${items.map(b => `
               <tr>
-                <td class="mono"><strong>${esc(b.filename)}</strong></td>
+                <td class="mono"><strong>${esc(b.filename)}</strong>${b.format === "json" ? ` <span class="badge">JSON archive</span>` : ""}</td>
                 <td class="muted">${fmtDateTime(b.created_at)}</td>
                 <td class="num">${(b.size_bytes / 1024).toFixed(1)} KB</td>
                 <td class="right">
                   <button class="btn btn-ghost btn-sm" data-val="${esc(b.filename)}">Validate</button>
                   <button class="btn btn-ghost btn-sm" data-dl="${esc(b.filename)}">Download</button>
-                  <button class="btn btn-danger btn-sm" data-rest="${esc(b.filename)}">Restore</button>
+                  ${b.format === "json"
+                    ? `<span class="muted" style="font-size:11px" title="Automatic restore is only available for SQLite backups">Archive only</span>`
+                    : `<button class="btn btn-danger btn-sm" data-rest="${esc(b.filename)}">Restore</button>`}
                 </td>
               </tr>`).join("")}
           </tbody>
@@ -71,14 +73,14 @@ export async function renderBackups(root) {
 
   root.querySelector("#bk-upload-val").onclick = async () => {
     const f = fileEl.files[0];
-    if (!f) { toast("Select a .db backup file first", "warn"); return; }
+    if (!f) { toast("Select a backup file first", "warn"); return; }
     const fd = new FormData();
     fd.append("file", f);
     try {
       const r = await api.post("/api/backups/upload", fd);
       uploadedFilename = r.filename;
-      restUpBtn.disabled = false;
-      msgEl.textContent = `Uploaded as ${r.filename} — Integrity OK (${r.validation?.tables || 0} tables verified).`;
+      restUpBtn.disabled = r.format !== "sqlite";
+      msgEl.textContent = `Uploaded as ${r.filename} — ${r.format === "sqlite" ? "Integrity OK" : "JSON snapshot validated"} (${r.validation?.tables || 0} tables verified).`;
       toast("Backup uploaded and validated");
     } catch (e) {
       msgEl.textContent = `Validation failed: ${e.message}`;
@@ -120,15 +122,13 @@ export async function renderBackups(root) {
   root.querySelectorAll("[data-val]").forEach(b => b.onclick = async () => {
     try {
       const r = await api.post(`/api/backups/validate?filename=${encodeURIComponent(b.dataset.val)}`);
-      toast(`Valid SQLite backup (${r.tables} tables, integrity OK)`);
+      toast(`Valid ${r.format === "sqlite" ? "SQLite backup" : "JSON snapshot"} (${r.tables} tables verified)`);
     } catch (e) { toast(e.message, "err"); }
   });
 
   root.querySelectorAll("[data-dl]").forEach(b => b.onclick = async () => {
     const fn = b.dataset.dl;
-    const res = await fetch(`/api/backups/${encodeURIComponent(fn)}/download`, {
-      headers: { Authorization: `Bearer ${auth.token}` },
-    });
+    const res = await api.get(`/api/backups/${encodeURIComponent(fn)}/download`, { raw: true });
     if (!res.ok) { toast("Download failed", "err"); return; }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);

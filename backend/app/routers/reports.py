@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 def dashboard(date_from: str | None = None, date_to: str | None = None,
               from_: str | None = Query(default=None, alias="from"),
               to_: str | None = Query(default=None, alias="to"),
-              db=Depends(get_db), user: User = Depends(get_current_user)):
+              db=Depends(get_db), user: User = Depends(require_report)):
     df = date_from or from_
     dt = date_to or to_
     return report_service.dashboard(db, df, dt, user)
@@ -28,9 +28,10 @@ def sales_trend(date_from: str, date_to: str, group: str = "day",
 def sales_by(field: str, date_from: str | None = None,
              date_to: str | None = None, db=Depends(get_db),
              _: User = Depends(require_report)):
-    if field not in ("product", "service", "category", "cashier", "method",
-                     "customer"):
-        return {"error": "unknown field"}, 400
+    if field not in ("product", "service", "category", "brand", "cashier",
+                     "method", "customer"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Unknown sales breakdown field")
     return report_service.sales_by(db, field, date_from, date_to)
 
 

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..models import (Supplier, Purchase, PurchaseItem, PurchasePayment,
                       PurchaseReturn, PurchaseReturnItem, Product)
-from ..core.dates import range_utc
+from ..core.dates import ensure_datetime, range_utc
 from ..services import inventory_service, notification_service
 from ..services.settings_service import next_number
 
@@ -121,9 +121,11 @@ def create_purchase(db: Session, data: dict, user_id: int | None = None) -> Purc
             received_quantity=0, unit_cost_paisa=it["unit_cost_paisa"],
             line_total_paisa=line_total))
     discount = min(data.get("discount_paisa", 0) or 0, subtotal)
+    order_date = ensure_datetime(data.get("order_date"), default_now=True)
     po = Purchase(
         po_number=next_number(db, "po_number", data.get("prefix") or "PO"),
-        supplier_id=supplier.id, subtotal_paisa=subtotal,
+        supplier_id=supplier.id, order_date=order_date,
+        subtotal_paisa=subtotal,
         discount_paisa=discount, total_paisa=subtotal - discount,
         notes=data.get("notes"), created_by=user_id)
     po.items = items
@@ -217,17 +219,25 @@ def create_purchase_return(db: Session, data: dict, user_id: int | None = None) 
         if qty <= 0:
             raise ValueError("Return quantity must be positive")
         # cannot return more than was received (minus already returned)
-        received = (db.query(func.coalesce(func.sum(PurchaseItem.received_quantity), 0))
-                    .filter(PurchaseItem.product_id == product.id)
-                    .filter(PurchaseItem.purchase_id == (purchase.id if purchase else Purchase.id))
-                    .scalar() or 0)
         if purchase:
             pi = next((i for i in purchase.items if i.product_id == product.id), None)
             received = pi.received_quantity if pi else 0
-        already = (db.query(func.coalesce(func.sum(PurchaseReturnItem.quantity), 0))
-                   .filter(PurchaseReturnItem.product_id == product.id)
-                   .filter(PurchaseReturnItem.return_.has(PurchaseReturn.purchase_id == (purchase.id if purchase else -1)))
-                   .scalar() or 0)
+            already = (db.query(func.coalesce(func.sum(PurchaseReturnItem.quantity), 0))
+                       .filter(PurchaseReturnItem.product_id == product.id)
+                       .filter(PurchaseReturnItem.return_.has(
+                           PurchaseReturn.purchase_id == purchase.id))
+                       .scalar() or 0)
+        else:
+            # Unlinked (supplier-level) returns: compare against all receipts of
+            # this product and count every unlinked return already recorded.
+            received = (db.query(func.coalesce(func.sum(PurchaseItem.received_quantity), 0))
+                        .filter(PurchaseItem.product_id == product.id)
+                        .scalar() or 0)
+            already = (db.query(func.coalesce(func.sum(PurchaseReturnItem.quantity), 0))
+                       .filter(PurchaseReturnItem.product_id == product.id)
+                       .filter(PurchaseReturnItem.return_.has(
+                           PurchaseReturn.purchase_id.is_(None)))
+                       .scalar() or 0)
         if qty > received - already:
             raise ValueError(
                 f"Cannot return {qty} of '{product.name}' — only "
@@ -268,21 +278,34 @@ def supplier_balance(db: Session, sid: int) -> int:
 
 
 def supplier_statement(db: Session, sid: int) -> list[dict]:
+    """Ledger of everything owed to / paid to a supplier.
+
+    ``balance_impact`` must agree with :func:`supplier_balance`: cancelled
+    purchase orders and non-approved returns are shown for history but do not
+    move the running balance.
+    """
     rows = []
     for p in db.query(Purchase).filter(Purchase.supplier_id == sid).order_by(Purchase.id).all():
+        counted = p.status != "cancelled"
         rows.append({"date": p.order_date.isoformat() if p.order_date else None,
                      "type": "purchase", "ref": p.po_number,
-                     "amount_paisa": p.total_paisa, "balance_impact": p.total_paisa,
+                     "amount_paisa": p.total_paisa,
+                     "balance_impact": p.total_paisa if counted else 0,
+                     "status": p.status,
                      "notes": p.notes})
     for pay in db.query(PurchasePayment).filter(PurchasePayment.supplier_id == sid).order_by(PurchasePayment.id).all():
         rows.append({"date": pay.created_at.isoformat() if pay.created_at else None,
                      "type": "payment", "ref": pay.reference or "",
                      "amount_paisa": -pay.amount_paisa, "balance_impact": -pay.amount_paisa,
+                     "status": "paid",
                      "notes": pay.method})
     for r in db.query(PurchaseReturn).filter(PurchaseReturn.supplier_id == sid).all():
+        counted = r.status == "approved"
         rows.append({"date": r.return_date.isoformat() if r.return_date else None,
                      "type": "purchase_return", "ref": r.return_number,
-                     "amount_paisa": -r.total_paisa, "balance_impact": -r.total_paisa,
+                     "amount_paisa": -r.total_paisa,
+                     "balance_impact": -r.total_paisa if counted else 0,
+                     "status": r.status,
                      "notes": r.notes})
     rows.sort(key=lambda x: x.get("date") or "")
     return rows

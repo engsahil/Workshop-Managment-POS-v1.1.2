@@ -62,6 +62,8 @@ def product_out(p: Product) -> dict:
         "purchase_cost_paisa": p.purchase_cost_paisa,
         "selling_price_paisa": p.selling_price_paisa,
         "quantity_on_hand": p.quantity_on_hand, "min_stock": p.min_stock,
+        "low_stock": (p.min_stock or 0) > 0 and p.quantity_on_hand <= p.min_stock,
+        "out_of_stock": p.quantity_on_hand <= 0,
         "unit": p.unit, "supplier_id": p.supplier_id, "description": p.description,
         "is_service": p.is_service, "warranty_days": p.warranty_days,
         "is_active": p.is_active,
@@ -131,6 +133,16 @@ def create_product(db: Session, data: dict, created_by: int | None = None) -> Pr
 
 def update_product(db: Session, p: Product, data: dict) -> Product:
     _check_sku_barcode_unique(db, data.get("sku"), data.get("barcode"), exclude_id=p.id)
+    if data.get("is_service") is True and not p.is_service:
+        # Turning a stocked part into a service would strand its quantity and
+        # movement history in a row that can never be received again.
+        if p.quantity_on_hand:
+            raise ValueError(
+                "Cannot convert a product with stock on hand into a service")
+        if db.query(StockMovement.id).filter(
+                StockMovement.product_id == p.id).first():
+            raise ValueError(
+                "Product has stock history — create a separate service instead")
     for k, v in data.items():
         if v is not None or k in ("sku", "barcode", "description", "supplier_id",
                                   "category_id", "brand_id", "compatibility"):
@@ -143,6 +155,11 @@ def delete_product(db: Session, p: Product) -> None:
     movements = db.query(StockMovement.id).filter(StockMovement.product_id == p.id).first()
     if movements:
         raise ValueError("Product has stock history — deactivate it instead of deleting.")
+    from ..models import InvoiceItem, PurchaseItem
+    if db.query(InvoiceItem.id).filter(InvoiceItem.product_id == p.id).first():
+        raise ValueError("Product is used on invoices — deactivate it instead of deleting.")
+    if db.query(PurchaseItem.id).filter(PurchaseItem.product_id == p.id).first():
+        raise ValueError("Product is used on purchase orders — deactivate it instead of deleting.")
     db.delete(p)
     db.commit()
 
@@ -153,10 +170,12 @@ def adjust_stock(db: Session, *, product_id: int, delta: int, movement_type: str
     product = get_product(db, product_id)
     if product is None:
         raise ValueError("Product not found")
+    if int(delta) == 0:
+        raise ValueError("Adjustment quantity must not be zero")
     mtype = STOCK_DAMAGE if movement_type == "damage" else STOCK_ADJUST
     mv = apply_stock(db, product, delta, movement_type=mtype,
                      reference_type="adjustment", notes=reason,
-                     created_by=user_id, force=True)
+                     created_by=user_id)
     db.commit()
     return mv
 
@@ -169,7 +188,7 @@ def receive_stock(db: Session, *, product_id: int, quantity: int, unit_cost_pais
         raise ValueError("Product not found")
     weighted_average_receive(db, product, quantity, unit_cost_paisa)
     mv = apply_stock(db, product, quantity, movement_type=STOCK_RECEIVE,
-                     reference_type="purchase" if reference_number is None else "manual_receive",
+                     reference_type="manual_receive",
                      reference_number=reference_number, notes=notes,
                      created_by=user_id, unit_cost_paisa=unit_cost_paisa)
     db.commit()
@@ -214,6 +233,8 @@ def list_movements(db: Session, product_id: int | None = None, movement_type: st
 def low_stock_products(db: Session):
     rows = db.query(Product).filter(
         Product.is_active.is_(True),
+        Product.is_service.is_(False),
+        Product.min_stock > 0,
         Product.quantity_on_hand <= Product.min_stock,
     ).order_by(Product.quantity_on_hand.asc()).all()
     return [product_out(p) for p in rows]

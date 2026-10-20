@@ -4,6 +4,33 @@ All notable changes from `1.0.0` through release **`1.2.2`** are documented belo
 
 ---
 
+## [Unreleased] — Full audit & hardening (2026-10-19)
+
+### Fixed (reported defects)
+- **Dashboard 500 on PostgreSQL:** `report_service.dashboard()` compared timestamp columns to plain strings (`operator does not exist: timestamp without time zone >= character varying`). All report date filters now pass typed naive-UTC datetimes, with dialect-aware "today" boundaries. Live PostgreSQL verification: dashboard returns correct totals for explicit ranges and single-day ranges.
+- **Inventory / Mechanics & Staff `innerHTML` of null:** page renderers wrote into DOM targets that had been replaced by a tab switch. Per-route `.page-view` roots plus `isConnected`/stale-sequence guards remove the crash.
+- **Cash Shifts:** opening a shift posted `notes` while the API expected `opening_notes` (422). Expected cash now includes cash refunds, void reversals and shift-tied cash expenses. Only the owning cashier may close a shift unless an admin/manager overrides; the ledger endpoint backs the new reconciliation view.
+- **Reports & Analytics:** unknown `sales_by` breakdown returns 400 instead of a server error; stale tab responses are ignored; the page shows a Retry card on load failure.
+
+### Fixed (additional audit findings)
+- Backups: SQLite online-backup + integrity validation, JSON v1 snapshot for PostgreSQL, safe restore with pre-restore backup, clear 400 for unsupported restores.
+- Invoices/returns: refund/credit split persisted, refund capped at paid amount, void blocked with open returns, `cashier_name` fixed (broken `__import__("app.models")` path).
+- Stock: whole-unit quantities for stock-tracked items; low/out-of-stock semantics; services excluded from low-stock; negative-stock policy honoured on adjustments.
+- Job cards: cancel restores consumed parts; cancelled jobs cannot be invoiced; unknown `mechanic_id` now returns 400 instead of a 500 IntegrityError; job invoicing requires POS roles.
+- Claims: reference validation (400) and enum validation (422) on create/update.
+- Customers: duplicate phone detection across formatting (`0300-1234567` = `+92 300 1234567`) on create and update (409).
+- Credit: repayments flip invoices back to `partial`.
+- Dashboard `collections` now exposes `refunds_paisa` and `net_paisa`.
+- Settings: `alt_phone`, `tax_ntn`, `invoice_footer` are persisted and printed; audit log honours `page_size`; legal documents accept `{content}` only.
+- RBAC: `require_financial` on money-writing routes, `require_report` on reports and daily summaries, last-admin protection, role-gated billing buttons and Daily Summary control.
+- Frontend: sidebar logo resolves through `/api/files/`, guarded optional buttons, idempotent logging setup, naive-UTC `utcnow()`.
+
+### Tests
+- `backend/tests/test_zz_audit_fixes.py`: 29 regression tests for the fixes above.
+- Final suites: **117 passed** on SQLite; **115 passed, 2 skipped** on PostgreSQL 16.2 (the skips are SQLite-only backup-restore tests).
+
+---
+
 ## [1.2.2] — 2026-10-17
 
 ### Fixed (ES-Module Exports, First-Run Setup Payload & Meta Tag Deprecation)

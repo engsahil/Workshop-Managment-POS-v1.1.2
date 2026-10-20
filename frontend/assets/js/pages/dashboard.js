@@ -26,12 +26,14 @@ export async function renderDashboard(root) {
 
   async function load() {
     const body = root.querySelector("#dash-body");
+    if (!body || !root.isConnected) return;
     const df = encodeURIComponent(fromEl.value || today);
     const dt = encodeURIComponent(toEl.value || today);
     let d;
     try {
       d = await api.get(`/api/reports/dashboard?date_from=${df}&date_to=${dt}`);
     } catch (err) {
+      if (!body.isConnected) return;
       body.innerHTML = `
         <div class="card">
           <div class="form-error" style="margin-bottom:10px">
@@ -43,6 +45,7 @@ export async function renderDashboard(root) {
       return;
     }
 
+    if (!body.isConnected) return;
     const sales = d?.sales || {};
     const collections = d?.collections || {};
     const profit = d?.profit || {};
@@ -62,6 +65,7 @@ export async function renderDashboard(root) {
           <div class="k-label">Payments Collected</div>
           <div class="k-value">${money(collections.total_paisa)}</div>
           <div class="k-sub">Cash ${money(collections.cash_paisa)} · Digital/Card ${money(collections.card_digital_paisa)}</div>
+          <div class="k-sub">Refunds ${money(collections.refunds_paisa || 0)} · Net ${money(collections.net_paisa ?? collections.total_paisa)}</div>
         </div>
         <div class="kpi">
           <div class="k-label">Parts vs Labor</div>

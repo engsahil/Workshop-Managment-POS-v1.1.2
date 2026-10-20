@@ -1,6 +1,12 @@
 """System-level tests: audit log, backups, settings, legal, errors."""
 from pathlib import Path
 
+import pytest
+
+from app.core.config import DATABASE_URL
+
+IS_SQLITE = DATABASE_URL.startswith("sqlite")
+
 
 def test_audit_log_written(client, auth):
     client.post("/api/customers", headers=auth, json={
@@ -36,9 +42,14 @@ def test_backup_create_list_download_restore(client, auth):
     # validate
     r = client.post(f"/api/backups/validate?filename={fn}", headers=auth)
     assert r.status_code == 200
-    # restore (same DB) succeeds
+    # SQLite restores in place; PostgreSQL backups are JSON archives and the
+    # API deliberately refuses an automatic destructive restore.
     r = client.post(f"/api/backups/{fn}/restore", headers=auth, json={})
-    assert r.status_code == 200
+    if IS_SQLITE:
+        assert r.status_code == 200
+    else:
+        assert r.status_code == 400
+        assert "only supported on SQLite" in r.json()["detail"]
 
 
 def test_backup_filename_traversal_rejected(client, auth):
@@ -100,14 +111,15 @@ def test_404_and_validation_errors(client, auth):
     assert r.status_code == 404
 
 
+@pytest.mark.skipif(not IS_SQLITE, reason="SQLite-only deployment asset")
 def test_database_file_created_in_data_dir():
     from app.core.config import DATA_DIR
     assert (Path(DATA_DIR) / "auto_workshop.db").exists()
 
 
+@pytest.mark.skipif(not IS_SQLITE, reason="SQLite-only pragma check")
 def test_sqlite_foreign_keys_enforced():
     import sqlite3
-    from app.core.config import DATABASE_URL
     path = DATABASE_URL.replace("sqlite:///", "")
     con = sqlite3.connect(path)
     try:

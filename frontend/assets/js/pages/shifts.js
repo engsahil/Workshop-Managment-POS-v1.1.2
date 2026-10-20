@@ -79,7 +79,7 @@ export async function renderShifts(root) {
         e.preventDefault();
         const fd = formData(e.target);
         try {
-          await api.post("/api/shifts/open", { opening_cash_paisa: toPaisa(fd.opening_cash), notes: fd.notes || null });
+          await api.post("/api/shifts/open", { opening_cash_paisa: toPaisa(fd.opening_cash), opening_notes: fd.notes || null });
           toast("Shift opened");
           m.close(); reload();
         } catch (err) { toast(err.message, "err"); }

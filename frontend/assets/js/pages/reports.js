@@ -28,17 +28,37 @@ export async function renderReports(root) {
 
   let currentTab = "profit";
   let lastRows = [];
+  let runSeq = 0;
+
+  function showError(body, err) {
+    if (!body) return;
+    body.innerHTML = `
+      <div class="card">
+        <div class="form-error" style="margin-bottom:10px">
+          Could not load report: ${esc(err.message || "Unexpected error")}
+        </div>
+        <button class="btn btn-primary btn-sm" id="r-retry">Retry</button>
+      </div>`;
+    const btn = body.querySelector("#r-retry");
+    if (btn) btn.onclick = () => run();
+  }
 
   async function run() {
-    const df = root.querySelector("#r-from").value || monthStart;
-    const dt = root.querySelector("#r-to").value || today;
+    const dfEl = root.querySelector("#r-from");
+    const dtEl = root.querySelector("#r-to");
     const body = root.querySelector("#r-body");
-
+    if (!dfEl || !dtEl || !body) return;
+    const df = dfEl.value || monthStart;
+    const dt = dtEl.value || today;
+    const seq = ++runSeq;
+    const stale = () => seq !== runSeq || !body.isConnected;
+    try {
     if (currentTab === "profit") {
       const [p, trend] = await Promise.all([
         api.get(`/api/reports/profit?date_from=${df}&date_to=${dt}`),
         api.get(`/api/reports/sales-trend?date_from=${df}&date_to=${dt}`),
       ]);
+      if (stale()) return;
       lastRows = trend;
       body.innerHTML = `
         <div class="kpi-grid">
@@ -67,6 +87,7 @@ export async function renderReports(root) {
         </div>`;
     } else if (currentTab === "product" || currentTab === "service") {
       const rows = await api.get(`/api/reports/sales-by/${currentTab}?date_from=${df}&date_to=${dt}`);
+      if (stale()) return;
       lastRows = rows;
       body.innerHTML = `
         <div class="card">
@@ -83,6 +104,7 @@ export async function renderReports(root) {
         </div>`;
     } else if (currentTab === "payments") {
       const rows = await api.get(`/api/reports/payments-summary?date_from=${df}&date_to=${dt}`);
+      if (stale()) return;
       lastRows = rows;
       body.innerHTML = `
         <div class="card">
@@ -99,6 +121,7 @@ export async function renderReports(root) {
         </div>`;
     } else if (currentTab === "mechanics") {
       const rows = await api.get(`/api/reports/mechanic-performance?date_from=${df}&date_to=${dt}`);
+      if (stale()) return;
       lastRows = rows;
       body.innerHTML = `
         <div class="card">
@@ -122,6 +145,7 @@ export async function renderReports(root) {
         </div>`;
     } else if (currentTab === "stock") {
       const rows = await api.get("/api/reports/stock");
+      if (stale()) return;
       lastRows = rows;
       const totalVal = rows.reduce((a, b) => a + b.value_paisa, 0);
       body.innerHTML = `
@@ -150,6 +174,9 @@ export async function renderReports(root) {
             </table>
           </div>`}
         </div>`;
+    }
+    } catch (err) {
+      if (!stale()) showError(body, err);
     }
   }
 

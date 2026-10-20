@@ -245,13 +245,21 @@ def daily_summary_data(db: Session, target_date: str | None = None) -> dict:
 
     invoiced_sales_paisa = sum(i.total_paisa or 0 for i in invoices)
     day_invoice_balance_paisa = sum(i.balance_paisa or 0 for i in invoices)
+    credit_invoices = [i for i in invoices if (i.balance_paisa or 0) > 0]
+    credit_sales_paisa = sum(i.total_paisa or 0 for i in credit_invoices)
 
-    pay_q = db.query(func.coalesce(func.sum(Payment.amount_paisa), 0)).filter(Payment.amount_paisa > 0)
+    pay_q = db.query(func.coalesce(func.sum(Payment.amount_paisa), 0)).filter(
+        Payment.amount_paisa > 0)
+    refund_q = db.query(func.coalesce(func.sum(Payment.amount_paisa), 0)).filter(
+        Payment.amount_paisa < 0)
     if u_from:
         pay_q = pay_q.filter(Payment.created_at >= u_from)
+        refund_q = refund_q.filter(Payment.created_at >= u_from)
     if u_to:
         pay_q = pay_q.filter(Payment.created_at <= u_to)
+        refund_q = refund_q.filter(Payment.created_at <= u_to)
     payments_received_paisa = int(pay_q.scalar() or 0)
+    refunds_paisa = -int(refund_q.scalar() or 0)
 
     outstanding_balances_paisa = int(
         db.query(func.coalesce(func.sum(Invoice.balance_paisa), 0))
@@ -315,25 +323,43 @@ def daily_summary_data(db: Session, target_date: str | None = None) -> dict:
         claims_today_q = claims_today_q.filter(WarrantyClaim.claim_date <= u_to)
     warranty_claims_today = int(claims_today_q.scalar() or 0)
 
+    out_of_stock_count = int(
+        db.query(func.count(Product.id))
+        .filter(Product.is_active.is_(True), Product.is_service.is_(False),
+                Product.quantity_on_hand <= 0)
+        .scalar() or 0
+    )
+    net_cash_flow = payments_received_paisa - refunds_paisa - expenses_paisa
     return {
         "date": day,
+        # canonical keys
         "invoiced_sales_paisa": invoiced_sales_paisa,
         "total_sales_paisa": invoiced_sales_paisa,
+        "sales_total_paisa": invoiced_sales_paisa,
         "invoice_count": len(invoices),
+        "invoices_count": len(invoices),
+        "credit_sales_count": len(credit_invoices),
+        "credit_sales_paisa": credit_sales_paisa,
         "payments_received_paisa": payments_received_paisa,
+        "collected_paisa": payments_received_paisa,
+        "refunds_paisa": refunds_paisa,
         "day_invoice_balance_paisa": day_invoice_balance_paisa,
         "outstanding_balances_paisa": outstanding_balances_paisa,
         "jobs_opened": jobs_opened,
         "jobs_completed": jobs_completed,
+        "jobs_completed_count": jobs_completed,
         "jobs_delivered": jobs_delivered,
         "expenses_paisa": expenses_paisa,
+        "expenses_total_paisa": expenses_paisa,
         "expenses_recorded_paisa": expenses_paisa,
         "expenses_count": expenses_count,
         "low_stock_count": low_stock_count,
         "low_stock_alerts": low_stock_count,
+        "out_of_stock_count": out_of_stock_count,
         "warranty_claims_open": warranty_claims_open,
         "warranty_claims_today": warranty_claims_today,
         "net_daily_operating_paisa": invoiced_sales_paisa - expenses_paisa,
+        "net_cash_flow_paisa": net_cash_flow,
     }
 
 

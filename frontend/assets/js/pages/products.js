@@ -17,6 +17,7 @@ export async function renderProducts(root, params = {}) {
       root.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
       t.classList.add("active");
       const tab = t.dataset.t;
+      body.dataset.tab = tab;
       if (tab === "catalog") renderCatalog(body, params);
       else if (tab === "movements") renderMovements(body);
       else renderTaxonomy(body);
@@ -26,11 +27,13 @@ export async function renderProducts(root, params = {}) {
 }
 
 async function renderCatalog(box, params) {
+  box.dataset.tab = "catalog";
   const [cats, brands, sups] = await Promise.all([
     api.get("/api/categories"),
     api.get("/api/brands"),
     api.get("/api/suppliers"),
   ]);
+  if (box.dataset.tab !== "catalog" || !box.isConnected) return;
 
   box.innerHTML = `
     <div class="toolbar">
@@ -53,12 +56,19 @@ async function renderCatalog(box, params) {
   `;
 
   async function load() {
-    const q = encodeURIComponent(box.querySelector("#p-q").value.trim());
-    const cat = box.querySelector("#p-cat").value;
-    const low = box.querySelector("#p-low").checked;
+    const qEl = box.querySelector("#p-q");
+    const catEl = box.querySelector("#p-cat");
+    const lowEl = box.querySelector("#p-low");
+    // The user may have switched tabs while a previous request was in flight.
+    if (!qEl || !catEl || !lowEl || box.dataset.tab !== "catalog") return;
+    const q = encodeURIComponent(qEl.value.trim());
+    const cat = catEl.value;
+    const low = lowEl.checked;
     const url = `/api/products?q=${q}${cat ? `&category_id=${cat}` : ""}${low ? "&low_stock=true" : ""}&include_services=false&page_size=100`;
     const res = await api.get(url);
+    if (box.dataset.tab !== "catalog" || !box.isConnected) return;
     const list = box.querySelector("#p-list");
+    if (!list) return;
     if (!res.items.length) { list.innerHTML = emptyState("No products found"); return; }
     list.innerHTML = `
       <div class="table-wrap">
@@ -279,7 +289,9 @@ function openAdjustModal(p, onDone) {
 }
 
 async function renderMovements(box) {
+  box.dataset.tab = "movements";
   const res = await api.get("/api/inventory/movements?page_size=100");
+  if (box.dataset.tab !== "movements" || !box.isConnected) return;
   box.innerHTML = `
     <div class="card">
       <div class="card-head"><h3 class="card-title">Stock Movement Audit Trail</h3></div>
@@ -306,7 +318,9 @@ async function renderMovements(box) {
 }
 
 async function renderTaxonomy(box) {
+  box.dataset.tab = "taxonomy";
   const [cats, brands] = await Promise.all([api.get("/api/categories"), api.get("/api/brands")]);
+  if (box.dataset.tab !== "taxonomy" || !box.isConnected) return;
   box.innerHTML = `
     <div class="grid-2">
       <div class="card">

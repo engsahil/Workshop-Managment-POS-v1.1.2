@@ -70,7 +70,7 @@ class ProductOut(BaseModel):
 class StockAdjustmentIn(BaseModel):
     product_id: int
     delta: int
-    movement_type: str = "adjust"   # adjust | damage
+    movement_type: str = Field(default="adjust", pattern="^(adjust|damage)$")
     reason: str = Field(min_length=1, max_length=300)
 
 

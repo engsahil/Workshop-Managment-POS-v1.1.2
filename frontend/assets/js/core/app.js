@@ -9,7 +9,7 @@ const NAV_ITEMS = [
   { section: "Operations" },
   { path: "/dashboard", label: "Dashboard", iconName: "dashboard", roles: ["admin", "manager", "cashier"] },
   { path: "/pos", label: "POS Billing", iconName: "pos", roles: ["admin", "manager", "cashier"] },
-  { path: "/jobs", label: "Job Cards", iconName: "jobs", roles: ["admin", "manager", "cashier"] },
+  { path: "/jobs", label: "Job Cards", iconName: "jobs", roles: ["admin", "manager", "cashier", "mechanic"] },
   { path: "/invoices", label: "Invoices", iconName: "invoices", roles: ["admin", "manager", "cashier"] },
   { path: "/shifts", label: "Cash Shifts", iconName: "shifts", roles: ["admin", "manager", "cashier"] },
   { section: "Workshop & Stock" },
@@ -28,7 +28,7 @@ const NAV_ITEMS = [
   { path: "/backups", label: "Backup & Restore", iconName: "backups", roles: ["admin"] },
   { path: "/audit", label: "Audit Log", iconName: "audit", roles: ["admin", "manager"] },
   { path: "/legal", label: "Privacy & Terms", iconName: "legal", roles: ["admin", "manager", "cashier"] },
-  { path: "/help", label: "Help & Guide", iconName: "help", roles: ["admin", "manager", "cashier"] },
+  { path: "/help", label: "Help & Guide", iconName: "help", roles: ["admin", "manager", "cashier", "mechanic"] },
 ];
 
 export const appState = {
@@ -199,11 +199,13 @@ export async function refreshBusinessHeader() {
   try {
     const b = await api.get("/api/settings/business");
     appState.business = b;
-    $("#sidebar-biz-name").textContent = b.business_name || "Auto Workshop";
+    const nameEl = $("#sidebar-biz-name");
+    if (nameEl) nameEl.textContent = b.business_name || "Auto Workshop";
     const logoBox = $("#sidebar-logo");
-    if (b.logo_path) {
-      logoBox.innerHTML = `<img src="${esc(b.logo_path)}" alt="logo" style="width:100%;height:100%;object-fit:cover;border-radius:6px"/>`;
-    } else {
+    if (logoBox && b.logo_path) {
+      const src = /^(https?:|\/)/.test(b.logo_path) ? b.logo_path : `/api/files/${b.logo_path}`;
+      logoBox.innerHTML = `<img src="${esc(src)}" alt="logo" style="width:100%;height:100%;object-fit:cover;border-radius:6px"/>`;
+    } else if (logoBox) {
       logoBox.textContent = (b.business_name || "AW").slice(0, 2).toUpperCase();
     }
   } catch { /* ignore */ }
@@ -211,8 +213,9 @@ export async function refreshBusinessHeader() {
     const sh = await api.get("/api/shifts/current");
     appState.currentShift = sh;
     const pill = $("#sidebar-shift-pill");
+    if (!pill) return;
     if (sh) {
-      pill.textContent = `Shift #${sh.shift_number} open`;
+      pill.textContent = `Shift #${sh.id} open`;
       pill.style.color = "var(--success)";
     } else {
       pill.textContent = "Shift closed";
@@ -226,14 +229,17 @@ export const refreshHeaderContext = refreshBusinessHeader;
 export async function refreshNotifications() {
   try {
     const data = await api.get("/api/notifications?limit=25");
+    const unread = data.unread_count ?? data.unread ?? 0;
     const badgeEl = $("#notif-badge");
-    if (data.unread > 0) {
-      badgeEl.hidden = false;
-      badgeEl.textContent = data.unread > 99 ? "99+" : String(data.unread);
-    } else {
-      badgeEl.hidden = true;
+    if (badgeEl) {
+      if (unread > 0) {
+        badgeEl.hidden = false;
+        badgeEl.textContent = unread > 99 ? "99+" : String(unread);
+      } else {
+        badgeEl.hidden = true;
+      }
     }
-    return data;
+    return { ...data, unread };
   } catch { return { items: [], unread: 0 }; }
 }
 
@@ -332,9 +338,11 @@ async function toggleNotificationsDrawer() {
   const data = await api.get("/api/notifications?limit=40");
   dr.innerHTML = `
     <div class="flex-between" style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border)">
-      <strong>Notifications (${data.unread} unread)</strong>
+      <strong>Notifications (${data.unread_count ?? data.unread ?? 0} unread)</strong>
       <div class="flex">
-        <button class="btn btn-ghost btn-sm" id="btn-daily-summary" title="View Daily Closing Summary">Daily Summary</button>
+        ${auth.hasRole("admin", "manager", "cashier")
+          ? `<button class="btn btn-ghost btn-sm" id="btn-daily-summary" title="View Daily Closing Summary">Daily Summary</button>`
+          : ""}
         <button class="btn btn-ghost btn-sm" id="btn-mark-all-read">Mark all read</button>
       </div>
     </div>
@@ -354,7 +362,8 @@ async function toggleNotificationsDrawer() {
   `;
   dr.hidden = false;
 
-  $("#btn-daily-summary").onclick = (e) => {
+  const dailyBtn = $("#btn-daily-summary");
+  if (dailyBtn) dailyBtn.onclick = (e) => {
     e.stopPropagation();
     dr.hidden = true;
     showDailyClosingSummaryModal();
@@ -449,7 +458,8 @@ function setupGlobalSearch() {
   document.addEventListener("click", (e) => {
     if (!e.target.closest(".topbar-search")) box.hidden = true;
     if (!e.target.closest("#notif-drawer") && !e.target.closest("#btn-notif")) {
-      $("#notif-drawer").hidden = true;
+      const drawer = $("#notif-drawer");
+      if (drawer) drawer.hidden = true;
     }
   });
 }
@@ -468,7 +478,11 @@ async function route() {
     return;
   }
 
-  const root = $("#page-root");
+  const pageRoot = $("#page-root");
+  const root = document.createElement("div");
+  root.className = "page-view";
+  root.style.display = "contents";
+  pageRoot.replaceChildren(root);
   if (path.startsWith("/legal/")) {
     const key = path.split("/")[2];
     $("#page-title").textContent = key === "terms_conditions" ? "Terms & Conditions" : "Privacy Policy";
@@ -477,6 +491,17 @@ async function route() {
   }
 
   const routeKey = path.replace(/^\/+/, "") || "dashboard";
+
+  // Mechanics only have workshop access. Send them to their job queue instead
+  // of rendering a dashboard whose financial calls would be rejected.
+  const role = auth.user?.role;
+  if (role === "mechanic") {
+    const allowed = new Set(["/jobs", "/help", "/legal"]);
+    if (!allowed.has(path) && !path.startsWith("/legal/")) {
+      location.hash = "#/jobs";
+      return;
+    }
+  }
   const pageEntry = Array.isArray(pages)
     ? (pages.find(p => p.route === routeKey) || pages.find(p => p.route === "dashboard"))
     : null;
@@ -499,6 +524,8 @@ async function route() {
       await fallback(root, params);
     }
   } catch (err) {
+    // Ignore failures from a view that has already been navigated away from.
+    if (!root.isConnected) return;
     root.innerHTML = `
       <div class="card">
         <div class="form-error" style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:0">
@@ -552,7 +579,9 @@ function showAppShell() {
   refreshBusinessHeader();
   refreshNotifications();
   if (!location.hash || location.hash === "#/" || location.hash.startsWith("#/legal/")) {
+    // Setting the hash triggers the hashchange listener; avoid a duplicate render.
     location.hash = "#/dashboard";
+    return;
   }
   route();
 }

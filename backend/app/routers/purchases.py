@@ -21,13 +21,13 @@ def list_suppliers(q: str | None = None, include_inactive: bool = False,
 
 @router.post("/suppliers")
 def create_supplier(payload: SupplierIn, db=Depends(get_db),
-                    _: User = Depends(get_current_user)):
+                    _: User = Depends(require_financial)):
     return purchase_service.create_supplier(db, payload.model_dump())
 
 
 @router.put("/suppliers/{sid}")
 def update_supplier(sid: int, payload: SupplierUpdateIn, db=Depends(get_db),
-                    _: User = Depends(get_current_user)):
+                    _: User = Depends(require_financial)):
     s = purchase_service.get_supplier(db, sid)
     if s is None:
         raise HTTPException(status_code=404, detail="Supplier not found")
@@ -41,7 +41,7 @@ def update_supplier(sid: int, payload: SupplierUpdateIn, db=Depends(get_db),
 
 
 @router.delete("/suppliers/{sid}")
-def delete_supplier(sid: int, db=Depends(get_db), _: User = Depends(get_current_user)):
+def delete_supplier(sid: int, db=Depends(get_db), _: User = Depends(require_financial)):
     s = purchase_service.get_supplier(db, sid)
     if s is None:
         raise HTTPException(status_code=404, detail="Supplier not found")
@@ -85,7 +85,8 @@ def create_purchase(payload: PurchaseIn, db=Depends(get_db),
 
 @router.get("/purchases/{pid}")
 def get_purchase(pid: int, db=Depends(get_db), _: User = Depends(get_current_user)):
-    po = db.get(__import__("app.models", fromlist=["Purchase"]).Purchase, pid)
+    from ..models import Purchase
+    po = db.get(Purchase, pid)
     if po is None:
         raise HTTPException(status_code=404, detail="Purchase not found")
     return purchase_service.purchase_out(db, po)
@@ -93,7 +94,7 @@ def get_purchase(pid: int, db=Depends(get_db), _: User = Depends(get_current_use
 
 @router.post("/purchases/{pid}/receive")
 def receive_purchase(pid: int, payload: PurchaseReceiveIn, db=Depends(get_db),
-                     user: User = Depends(get_current_user)):
+                     user: User = Depends(require_financial)):
     from ..models import Purchase
     po = db.get(Purchase, pid)
     if po is None:

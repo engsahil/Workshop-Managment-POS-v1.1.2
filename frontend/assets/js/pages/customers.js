@@ -255,6 +255,8 @@ async function openProfile(cid, onDone) {
       } catch (err) { toast(err.message, "err"); }
     };
   };
-  root.querySelector("#cp-repay").onclick = () => payDialog("repayment");
-  root.querySelector("#cp-adv").onclick = () => payDialog("advance");
+  const repayBtn = root.querySelector("#cp-repay");
+  if (repayBtn) repayBtn.onclick = () => payDialog("repayment");
+  const advBtn = root.querySelector("#cp-adv");
+  if (advBtn) advBtn.onclick = () => payDialog("advance");
 }

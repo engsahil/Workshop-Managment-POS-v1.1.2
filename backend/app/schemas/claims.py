@@ -1,5 +1,8 @@
 from datetime import date, datetime
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+CLAIM_STATUSES = ("open", "under_review", "approved", "rejected", "resolved")
 
 
 class ClaimIn(BaseModel):
@@ -19,6 +22,20 @@ class ClaimIn(BaseModel):
     resolution: str | None = None
     cost_paisa: int = Field(default=0, ge=0)
     refund_amount_paisa: int = Field(default=0, ge=0)
+
+    @field_validator("item_type")
+    @classmethod
+    def item_type_ok(cls, v):
+        if v not in ("product", "service"):
+            raise ValueError("item_type must be product or service")
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def status_ok(cls, v):
+        if v not in CLAIM_STATUSES:
+            raise ValueError("Invalid claim status")
+        return v
 
     @model_validator(mode="before")
     @classmethod
@@ -65,6 +82,20 @@ class ClaimUpdateIn(BaseModel):
     resolution: str | None = None
     cost_paisa: int | None = Field(default=None, ge=0)
     refund_amount_paisa: int | None = Field(default=None, ge=0)
+
+    @field_validator("item_type")
+    @classmethod
+    def item_type_ok(cls, v):
+        if v is not None and v not in ("product", "service"):
+            raise ValueError("item_type must be product or service")
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def status_ok(cls, v):
+        if v is not None and v not in CLAIM_STATUSES:
+            raise ValueError("Invalid claim status")
+        return v
 
     @model_validator(mode="before")
     @classmethod

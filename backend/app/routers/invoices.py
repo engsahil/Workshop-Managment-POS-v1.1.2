@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..core.deps import (get_current_user, get_db, require_financial,
                          require_pos)
 from ..models import Invoice, User
+from ..schemas.finance import CustomerAdvanceIn, RepaymentIn
 from ..schemas.invoices import (InvoiceVoidIn, PaymentIn, SaleReturnIn,
                                    ReturnDecisionIn)
 from ..services import invoice_service
@@ -113,27 +114,23 @@ def void_invoice(iid: int, payload: InvoiceVoidIn, db=Depends(get_db),
 
 # ---------------------------------------------------------------- advances & repayments
 @router.post("/advances")
-def record_advance(payload: dict, db=Depends(get_db),
+def record_advance(payload: CustomerAdvanceIn, db=Depends(get_db),
                    user: User = Depends(require_pos)):
-    from ..schemas.finance import CustomerAdvanceIn
     try:
         pay = invoice_service.record_advance(
-            db, payload["customer_id"], payload["amount_paisa"],
-            payload.get("method", "cash"), payload.get("reference"),
-            payload.get("notes"), user)
-    except (KeyError, ValueError) as e:
+            db, payload.customer_id, payload.amount_paisa,
+            payload.method, payload.reference, payload.notes, user)
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True, "payment_id": pay.id}
 
 
 @router.post("/repayments")
-def record_repayment(payload: dict, db=Depends(get_db),
+def record_repayment(payload: RepaymentIn, db=Depends(get_db),
                      user: User = Depends(require_pos)):
-    from ..schemas.finance import RepaymentIn
     try:
         return invoice_service.record_repayment(
-            db, payload["customer_id"], payload["amount_paisa"],
-            payload.get("method", "cash"), payload.get("reference"),
-            payload.get("notes"), user)
-    except (KeyError, ValueError) as e:
+            db, payload.customer_id, payload.amount_paisa,
+            payload.method, payload.reference, payload.notes, user)
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
