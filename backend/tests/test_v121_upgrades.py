@@ -1,4 +1,4 @@
-"""Comprehensive v1.2.1 regression test suite.
+﻿"""Comprehensive v1.2.1 regression test suite.
 
 Covers:
 1. Frontend module & router contract (named `pages` export in `pages/index.js`,
@@ -69,8 +69,8 @@ def test_frontend_module_and_router_contract():
             assert proc.returncode == 0, f"JS syntax error in {jf.name}: {proc.stderr}"
 
         esm_script = f"""
-import {{ pages }} from "{(pages_dir / 'index.js').as_posix()}";
-import {{ appState, refreshHeaderContext, openDailySummaryModal }} from "{(core_dir / 'app.js').as_posix()}";
+import {{ pages }} from "{(pages_dir / 'index.js').as_uri()}";
+import {{ appState, refreshHeaderContext, openDailySummaryModal }} from "{(core_dir / 'app.js').as_uri()}";
 if (!Array.isArray(pages) || pages.length < 20) throw new Error("pages registry invalid");
 if (typeof refreshHeaderContext !== "function") throw new Error("refreshHeaderContext missing");
 if (typeof openDailySummaryModal !== "function") throw new Error("openDailySummaryModal missing");
@@ -80,7 +80,7 @@ for (const entry of pages) {{
 }}
 """
         esm_proc = subprocess.run(
-            [node_bin, "--experimental-default-type=module", "-e", esm_script],
+            [node_bin, "--input-type=module", "-e", esm_script],
             capture_output=True,
             text=True,
         )
@@ -306,3 +306,5 @@ def test_white_offwhite_beach_theme_and_pwa_assets(client):
     sw_text = sw_res.text
     assert 'url.pathname.startsWith("/api/")' in sw_text
     assert 'request.headers.get("Authorization")' in sw_text
+
+
